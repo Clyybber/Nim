@@ -427,7 +427,7 @@ proc setVarType(c: PContext; v: PSym, typ: PType) =
         "; new type is: " & typeToString(typ))
   v.typ = typ
 
-proc semVarOrLet(c: PContext, n: PNode, symkind: TSymKind): PNode =
+proc semVarOrLet(c: PContext, n: PNode, symkind: TSymKind, staticPrefix = false): PNode =
   var b: PNode
   result = copyNode(n)
   for i in countup(0, sonsLen(n)-1):
@@ -562,7 +562,7 @@ proc semVarOrLet(c: PContext, n: PNode, symkind: TSymKind): PNode =
         else: v.typ = tup
         b.sons[j] = newSymNode(v)
       checkNilable(c, v)
-      if sfCompileTime in v.flags:
+      if sfCompileTime in v.flags or staticPrefix:
         var x = newNodeI(result.kind, v.info)
         addSon(x, result[i])
         vm.setupCompileTimeVar(c.module, c.graph, x)
@@ -1701,7 +1701,7 @@ proc semMethodPrototype(c: PContext; s: PSym; n: PNode) =
 
 proc semProcAux(c: PContext, n: PNode, kind: TSymKind,
                 validPragmas: TSpecialWords,
-                phase = stepRegisterSymbol): PNode =
+                phase = stepRegisterSymbol, staticPrefix = false): PNode =
   result = semProcAnnotation(c, n, validPragmas)
   if result != nil: return result
   result = n
@@ -1759,7 +1759,7 @@ proc semProcAux(c: PContext, n: PNode, kind: TSymKind,
         # semParamList(c, n.sons[ParamsPos], nil, s)
   else:
     s.typ = newProcType(c, n.info)
-  if tfTriggersCompileTime in s.typ.flags: incl(s.flags, sfCompileTime)
+  if tfTriggersCompileTime in s.typ.flags or staticPrefix: incl(s.flags, sfCompileTime)
   if n.sons[patternPos].kind != nkEmpty:
     n.sons[patternPos] = semPattern(c, n.sons[patternPos])
   if s.kind == skIterator:
@@ -2159,3 +2159,12 @@ proc semStmt(c: PContext, n: PNode; flags: TExprFlags): PNode =
     result = semExprNoType(c, n)
   else:
     result = semExpr(c, n, flags)
+
+proc semStaticPrefix(c: PContext, n: PNode): PNode =
+  let a = n.sons[0]
+  if a.kind == nkLetSection: result = semVarOrLet(c, a, skLet, staticPrefix = true)
+  elif a.kind == nkVarSection: result = semVarOrLet(c, a, skLet, staticPrefix = true)
+  elif a.kind == nkProcDef: result = semProcAux(c, a, skProc, procPragmas, staticPrefix = true)
+  elif a.kind == nkFuncDef: result = semProcAux(c, a, skProc, procPragmas, staticPrefix = true)
+  else: discard "error"
+

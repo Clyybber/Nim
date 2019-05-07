@@ -223,6 +223,7 @@ type
     nkBreakState,         # special break statement for easier code generation
     nkFuncDef,            # a func
     nkTupleConstr         # a tuple constructor
+    nkStaticPrefix        # prefix for var, let sections or procs, intended to replace {.compiletime.}
 
   TNodeKinds* = set[TNodeKind]
 

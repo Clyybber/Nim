@@ -1623,10 +1623,9 @@ proc parseBlock(p: var TParser): PNode =
   colcom(p, result)
   addSon(result, parseStmt(p))
 
-proc parseStaticOrDefer(p: var TParser; k: TNodeKind): PNode =
-  #| staticStmt = 'static' colcom stmt
+proc parseDefer(p: var TParser): PNode =
   #| deferStmt = 'defer' colcom stmt
-  result = newNodeP(k, p)
+  result = newNodeP(nkDefer, p)
   getTok(p)
   colcom(p, result)
   addSon(result, parseStmt(p))
@@ -2092,6 +2091,21 @@ proc parseConstant(p: var TParser): PNode =
   result[^1] = postExprBlocks(p, result[^1])
   indAndComment(p, result)
 
+proc parseStaticBlockOrPrefix(p: var TParser): PNode =
+  #| staticStmt = 'static' colcom stmt
+  #| staticDecl = 'static' #let var proc
+  getTok(p)
+  if p.tok.tokType == tkColon:
+    result = newNodeP(nkStaticStmt, p)
+    colcom(p, result)
+    addSon(result, parseStmt(p))
+  else:
+    result = newNodeP(nkStaticPrefix, p)
+    if p.tok.tokType == tkLet: addSon(result, parseSection(p, nkLetSection, parseVariable))
+    elif p.tok.tokType == tkVar: addSon(result, parseSection(p, nkVarSection, parseVariable))
+    elif p.tok.tokType == tkProc: addson(result, parseRoutine(p, nkProcDef))
+    elif p.tok.tokType == tkFunc: addson(result, parseRoutine(p, nkFuncDef))
+
 proc parseBind(p: var TParser, k: TNodeKind): PNode =
   #| bindStmt = 'bind' optInd qualifiedIdent ^+ comma
   #| mixinStmt = 'mixin' optInd qualifiedIdent ^+ comma
@@ -2165,8 +2179,8 @@ proc complexOrSimpleStmt(p: var TParser): PNode =
   of tkExcept: result = parseExceptBlock(p, nkExceptBranch)
   of tkFor: result = parseFor(p)
   of tkBlock: result = parseBlock(p)
-  of tkStatic: result = parseStaticOrDefer(p, nkStaticStmt)
-  of tkDefer: result = parseStaticOrDefer(p, nkDefer)
+  of tkStatic: result = parseStaticBlockOrPrefix(p)
+  of tkDefer: result = parseDefer(p)
   of tkAsm: result = parseAsm(p)
   of tkProc: result = parseRoutine(p, nkProcDef)
   of tkFunc: result = parseRoutine(p, nkFuncDef)

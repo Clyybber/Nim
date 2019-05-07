@@ -2725,6 +2725,7 @@ proc semExpr(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
     for i in 0 ..< n.len:
       n.sons[i] = semExpr(c, n.sons[i])
   of nkComesFrom: discard "ignore the comes from information for now"
+  of nkStaticPrefix: result = semStaticPrefix(c, n)
   else:
     localError(c.config, n.info, "invalid expression: " &
                renderTree(n, {renderNoComments}))
