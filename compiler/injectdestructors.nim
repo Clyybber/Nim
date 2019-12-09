@@ -116,6 +116,8 @@ proc initialized(code: ControlFlowGraph; pc: int,
       for v in initA:
         if v in initB:
           init.incl v
+      if pcA > code.len:
+        return pcA
       pc = pcA+1
     of InstrKind.join:
       let target = pc + code[pc].dest
@@ -123,13 +125,16 @@ proc initialized(code: ControlFlowGraph; pc: int,
       inc pc
     of use:
       let v = code[pc].sym
-      if v.kind != skParam and v.id notin init:
+      if v != nil and  v.kind != skParam and v.id notin init:
         # attempt to read an uninit'ed variable
         uninit.incl v.id
       inc pc
     of def:
       let v = code[pc].sym
-      init.incl v.id
+      if v != nil:
+        init.incl v.id
+      else:
+        discard #TODO: Maybe partially initialize objects
       inc pc
   return pc
 
@@ -731,8 +736,10 @@ proc injectDestructorCalls*(g: ModuleGraph; owner: PSym; n: PNode): PNode =
       if isSinkTypeForParam(t) and hasDestructor(t.skipTypes({tySink})):
         c.destroys.add genDestroy(c, params[i])
 
-  #if optNimV2 in c.graph.config.globalOptions:
-  #  injectDefaultCalls(n, c)
+  #XXX: To properly do init elision we have to split =sink and =copy into
+  #subparts so that we can remove the part that would access uninited
+  #memory for initial assignments
+  injectDefaultCalls(n, c)
   let body = p(n, c)
   result = newNodeI(nkStmtList, n.info)
   if c.topLevelVars.len > 0:
