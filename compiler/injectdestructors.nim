@@ -21,6 +21,9 @@ import
 
 from trees import exprStructuralEquivalent
 
+import hashes
+import sets
+
 type
   Con = object
     owner: PSym
@@ -33,6 +36,8 @@ type
     inLoop: int
     uninit: IntSet # set of uninit'ed vars
     uninitComputed: bool
+    lastReads: HashSet[PNode]
+    firstWrites: HashSet[PNode]
 
 const toDebug {.strdefine.} = ""
 
@@ -41,7 +46,7 @@ template dbg(body) =
     if c.owner.name.s == toDebug or toDebug == "always":
       body
 
-proc isLastRead(location: PNode; c: var Con; pc, comesFrom: int): int =
+proc isLastReadOld(location: PNode; c: var Con; pc, comesFrom: int): int =
   var pc = pc
   while pc < c.g.len:
     case c.g[pc].kind
@@ -59,9 +64,18 @@ proc isLastRead(location: PNode; c: var Con; pc, comesFrom: int): int =
       pc = pc + c.g[pc].dest
     of fork:
       # every branch must lead to the last read of the location:
-      let variantA = isLastRead(location, c, pc+1, pc)
+      let variantA = isLastReadOld(location, c, pc+1, pc)
       if variantA < 0: return -1
-      var variantB = isLastRead(location, c, pc + c.g[pc].dest, pc)
+      var variantB = isLastReadOld(location, c, pc + c.g[pc].dest, pc)
+      if variantB < 0: return -1
+      elif variantB == high(int):
+        variantB = variantA
+      pc = variantB
+    of loop:
+      # every branch must lead to the last read of the location:
+      let variantA = isLastReadOld(location, c, pc+1, pc)
+      if variantA < 0: return -1
+      var variantB = isLastReadOld(location, c, pc + c.g[pc].dest, pc)
       if variantB < 0: return -1
       elif variantB == high(int):
         variantB = variantA
@@ -72,7 +86,7 @@ proc isLastRead(location: PNode; c: var Con; pc, comesFrom: int): int =
       inc pc
   return pc
 
-proc isLastRead(n: PNode; c: var Con): bool =
+proc isLastReadOld(n: PNode; c: var Con): bool =
   # first we need to search for the instruction that belongs to 'n':
   c.otherRead = nil
   var instr = -1
@@ -85,63 +99,24 @@ proc isLastRead(n: PNode; c: var Con): bool =
         instr = i
         break
 
-  dbg: echo "starting point for ", n, " is ", instr, " ", n.kind
-
   if instr < 0: return false
   # we go through all paths beginning from 'instr+1' and need to
   # ensure that we don't find another 'use X' instruction.
   if instr+1 >= c.g.len: return true
 
-  result = isLastRead(n, c, instr+1, -1) >= 0
-  dbg: echo "ugh ", c.otherRead.isNil, " ", result
+  result = isLastReadOld(n, c, instr+1, -1) >= 0
 
-proc isFirstWrite(location: PNode; c: var Con; pc, comesFrom: int; instr: int): int =
-  var pc = pc
-  while pc < instr:
-    case c.g[pc].kind
-    of def:
-      if defInstrTargets(c.g[pc], location):
-        # a definition of 's' before ours makes ours not the first write
-        return -1
-      inc pc
-    of use:
-      if useInstrTargets(c.g[pc], location):
-        return -1
-      inc pc
-    of goto:
-      pc = pc + c.g[pc].dest
-    of fork:
-      # every branch must not contain a def/use of our location:
-      let variantA = isFirstWrite(location, c, pc+1, pc, instr)
-      if variantA < 0: return -1
-      var variantB = isFirstWrite(location, c, pc + c.g[pc].dest, pc, instr + c.g[pc].dest)
-      if variantB < 0: return -1
-      elif variantB == high(int):
-        variantB = variantA
-      pc = variantB
-    of InstrKind.join:
-      let dest = pc + c.g[pc].dest
-      if dest == comesFrom: return pc + 1
-      inc pc
-  return pc
+proc hash(n: PNode): Hash = hash(cast[pointer](n))
+
+proc hash(s: PSym): Hash = hash(s.id)
+
+proc isLastRead(n: PNode; c: var Con): bool =
+  let m = dfa.skipConvDfa(n)
+  result = m in c.lastReads
 
 proc isFirstWrite(n: PNode; c: var Con): bool =
-  # first we need to search for the instruction that belongs to 'n':
-  var instr = -1
   let m = dfa.skipConvDfa(n)
-
-  for i in countdown(c.g.len-1, 0): # We search backwards here to treat loops correctly
-    if c.g[i].kind == def and c.g[i].n == m:
-      if instr < 0:
-        instr = i
-        break
-
-  if instr < 0: return false
-  # we go through all paths going to 'instr' and need to
-  # ensure that we don't find another 'def/use X' instruction.
-  if instr == 0: return true
-
-  result = isFirstWrite(n, c, 0, -1, instr) >= 0
+  result = m in c.firstWrites
 
 proc initialized(code: ControlFlowGraph; pc: int,
                  init, uninit: var IntSet; comesFrom: int): int =
@@ -153,6 +128,17 @@ proc initialized(code: ControlFlowGraph; pc: int,
     of goto:
       pc = pc + code[pc].dest
     of fork:
+      let target = pc + code[pc].dest
+      var initA = initIntSet()
+      var initB = initIntSet()
+      let pcA = initialized(code, pc+1, initA, uninit, pc)
+      discard initialized(code, target, initB, uninit, pc)
+      # we add vars if they are in both branches:
+      for v in initA:
+        if v in initB:
+          init.incl v
+      pc = pcA+1
+    of loop:
       let target = pc + code[pc].dest
       var initA = initIntSet()
       var initB = initIntSet()
@@ -776,6 +762,141 @@ proc reverseDestroys(destroys: seq[PNode]): seq[PNode] =
   for i in countdown(destroys.len - 1, 0):
     result.add destroys[i]
 
+import astalgo
+
+proc strip(n: PNode): PNode =
+  #This strips n as much as possible for storing in the hashset
+  result = n
+  while result.kind in {nkHiddenSubConv, nkHiddenStdConv, nkObjDownConv, nkObjUpConv, nkHiddenAddr, nkAddr, nkHiddenDeref, nkDerefExpr}:
+    result = result[0]
+
+proc nOrSub(s: HashSet[PNode], n: PNode): HashSet[PNode] =
+  for v in s:
+    if false:
+      result.incl v
+
+proc nOrParent(s: HashSet[PNode], n: PNode): HashSet[PNode] =
+  for v in s:
+    if false:#v.isTheSame(n):
+      result.incl v
+
+proc runtimeArrayAccessOfParent(s: HashSet[PNode], n: PNode): HashSet[PNode] =
+  for v in s:
+    if false:#v.sameField(n):
+      result.incl v
+
+proc staticArrayAccessOfParent(s: HashSet[PNode], n: PNode): HashSet[PNode] =
+  for v in s:
+    if false:#v.sameField(n):
+      result.incl v
+
+proc intersectResults(a: HashSet[PNode], b: HashSet[PNode]): HashSet[PNode] =
+  #If a has whole n and b has n.field our intersection must contain n.field
+  #If a has whole n and b has n[?] our intersection (must) contain n[?]
+  #If a has whole n and b has whole n our intersection must contain whole n
+  #If a has n.field and b has the same n.field our intersection must contain n.field
+  #If a has n.field and b has n[?] our intersection must not contain n.field or n[?]
+  discard
+
+proc intersectResults(a: HashSet[PNode], b: HashSet[PNode], c: HashSet[PNode]): HashSet[PNode] =
+  discard
+
+proc analyzeReadAndWrites(c: var Con, justRead, everWrote, everRead: var HashSet[PNode]; pc, comesFrom: int): tuple[lastReads, firstWrites: HashSet[PNode], pc: int] =
+  var pc = pc
+  while pc < c.g.len:
+    let ins = c.g[pc]
+    let n = ins.n
+    case ins.kind
+    of def:
+      block initElision:
+        #if everWrote.nOrSub(n).len == 0 and everRead.nOrSub(n).len == 0:
+        #  discard #XXX: Init for this variable can be omitted
+
+      block veryFirstWrite:
+        #Handle the very first write:
+        if everWrote.nOrSub(n).len > 0 and everWrote.nOrParent(n):
+          result.firstWrites.incl n
+
+
+      if justRead.nOrParent(n).len > 0 and #justRead.nOrSub(n).len > 0 and
+         justRead.runtimeArrayAccessOfParent(n).len == 0 and
+         justWrote.nOrSub(n).len == 0 and justWrote.nOrParent(n).len == 0:
+        result.firstWrites.incl n
+
+      result.lastReads.incl justRead.nOrSub(n) #No-op for runtimeArrayAccess
+
+      # if staticArrayAccess:
+      #   justRead.excl runtimeArrayAccessOfParent(n)
+      # elif runtimeArrayAccess:
+      #   justRead.excl runtimeArrayAccessOfParent(n)
+      #   justRead.excl staticArrayAccessOfParent(n)
+
+      justRead.excl nOrSub(n) #Do not exclude the parents, since we require case 6 to work
+      justWrote.inc n
+      everWrote.incl n
+      inc pc
+    of use: #kill everyone except our sedentary siblings
+      # if staticArrayAccess: #n[s]
+      #   justRead.excl justRead.runtimeArrayAccessOfParent(n) #n[r]
+      # elif runtimeArrayAccess: #n[r]
+      #   justRead.excl justRead.runtimeArrayAccessOfParent(n) #n[r]
+      #   justRead.excl justRead.staticArrayAccessOfParent(n) #n[s]
+
+      if justWrote.exactN(n).len > 0:#TOTHINK: nOrParent?
+
+      justRead.excl nOrSub(n) - justWrote.nOrSub(n) #No-op for runtimeArrayAccess
+      justRead.excl nOrParent(n) - justWrote.nOrSub(n)
+      justRead.incl n
+      everRead.incl n
+      inc pc
+    of goto:
+      pc = pc + ins.dest
+    of fork:
+      var justReadA, justReadB = justRead
+      var everWroteA, everWroteB = everWrote
+      var everReadA, everReadB = everRead
+      let branchA = analyzeReadAndWrites(c, justReadA, everWroteA, everReadA, pc+1, pc)
+      let branchB = analyzeReadAndWrites(c, justReadB, everWroteB, everReadB, pc + ins.dest, pc)
+      result.lastReads.incl   branchA.lastReads
+      result.firstWrites.incl branchA.firstWrites
+      result.lastReads.incl   branchB.lastReads
+      result.firstWrites.incl branchB.firstWrites
+      justRead = intersectResults(justReadA, justReadB)
+      everWrote = union(everWroteA, everWroteB)
+      everRead = union(everReadA, everReadB)
+      assert branchA.pc == branchB.pc, $branchA.pc & $branchB.pc
+      pc = branchA.pc
+    of loop:
+      var justReadBody, justReadEnd = justRead
+      var everWroteBody, everWroteEnd = everWrote
+      var everReadBody, everReadEnd = everRead
+      let body1 = analyzeReadAndWrites(c, justReadBody, everWroteBody, everReadBody, pc+1, pc)
+      let body2 = analyzeReadAndWrites(c, justReadBody, everWroteBody, everReadBody, pc+1, pc)
+      let body3 = analyzeReadAndWrites(c, justReadBody, everWroteBody, everReadBody, pc+1, pc)
+      result.lastReads = intersectResults(body1.lastReads, body2.lastReads, body3.lastReads)
+      result.firstWrites = intersectResults(body1.firstWrites, body2.firstWrites, body3.firstWrites)
+      let endResult = analyzeReadAndWrites(c, justReadEnd, everWroteEnd, everReadEnd, pc + ins.dest, pc)
+      justRead = intersectResults(justReadBody, justReadEnd)
+      everWrote = union(everWroteBody, everWroteEnd)
+      everRead = union(everReadBody, everReadEnd)
+      pc = endResult.pc #We don't actually need to do this, since this won't contain anything except for the join
+    of InstrKind.join:
+      if comesFrom == pc + ins.dest:
+        result.pc = pc + 1
+        return
+      inc pc
+  result.pc = pc
+  return
+
+proc computeLastReadAndFirstWrite(c: var Con): tuple[lastReads, firstWrites: HashSet[PNode]] =
+  var justRead, justWrote, everRead: HashSet[PNode]
+
+  var (lastReads, firstWrites, _) = analyzeReadAndWrites(c, justRead, justWrote, everRead, 0, -1)
+
+  result.lastReads = lastReads
+  result.lastReads.incl justRead #All reads done at the end are last reads
+  result.firstWrites = firstWrites 
+
 proc injectDestructorCalls*(g: ModuleGraph; owner: PSym; n: PNode): PNode =
   if sfGeneratedOp in owner.flags or (owner.kind == skIterator and isInlineIterator(owner.typ)):
     return n
@@ -802,6 +923,7 @@ proc injectDestructorCalls*(g: ModuleGraph; owner: PSym; n: PNode): PNode =
       if isSinkTypeForParam(t) and hasDestructor(t.skipTypes({tySink})):
         c.destroys.add genDestroy(c, params[i])
 
+  (c.lastReads, c.firstWrites) = computeLastReadAndFirstWrite(c)
   #if optNimV2 in c.graph.config.globalOptions:
   #  injectDefaultCalls(n, c)
   let body = p(n, c, normal)

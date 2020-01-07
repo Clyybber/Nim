@@ -35,13 +35,13 @@ from patterns import sameTrees
 
 type
   InstrKind* = enum
-    goto, fork, join, def, use
+    goto, fork, loop, join, def, use
   Instr* = object
     n*: PNode # contains the def/use location.
               # This is used so that we can track object
               # and tuple field accesses precisely.
     case kind*: InstrKind
-    of goto, fork, join: dest*: int
+    of goto, fork, loop, join: dest*: int
     else: discard
 
   ControlFlowGraph* = seq[Instr]
@@ -68,7 +68,7 @@ proc codeListing(c: ControlFlowGraph, result: var string, start=0; last = -1) =
   var jumpTargets = initIntSet()
   let last = if last < 0: c.len-1 else: min(last, c.len-1)
   for i in start..last:
-    if c[i].kind in {goto, fork, join}:
+    if c[i].kind in {goto, fork, loop, join}:
       jumpTargets.incl(i+c[i].dest)
   var i = start
   while i <= last:
@@ -79,7 +79,7 @@ proc codeListing(c: ControlFlowGraph, result: var string, start=0; last = -1) =
     case c[i].kind
     of def, use:
       result.add renderTree(c[i].n)
-    of goto, fork, join:
+    of goto, fork, loop, join:
       result.add "L"
       result.addInt c[i].dest+i
     result.add("\t#")
@@ -96,14 +96,19 @@ proc echoCfg*(c: ControlFlowGraph; start=0; last = -1) {.deprecated.} =
   when declared(echo):
     echo buf
 
+proc gotoI(c: var Con; n: PNode): TPosition =
+  result = TPosition(c.code.len)
+  c.code.add Instr(n: n, kind: goto, dest: 0)
+
 proc forkI(c: var Con; n: PNode): TPosition =
   result = TPosition(c.code.len)
   c.code.add Instr(n: n, kind: fork, dest: 0)
   c.forks.add result
 
-proc gotoI(c: var Con; n: PNode): TPosition =
+proc loopI(c: var Con; n: PNode): TPosition =
   result = TPosition(c.code.len)
-  c.code.add Instr(n: n, kind: goto, dest: 0)
+  c.code.add Instr(n: n, kind: loop, dest: 0)
+  c.forks.add result
 
 #[
 
@@ -292,6 +297,16 @@ proc isTrue(n: PNode): bool =
 proc gen(c: var Con; n: PNode) # {.noSideEffect.}
 
 when true:
+  proc genWhile(c: var Con; n: PNode) =
+    let oldLen = c.forks.len
+    let ending = c.loopI(n)
+    c.gen(n[0])
+    c.gen(n[1])
+    c.patch(ending)
+    c.joinI(c.forks.pop(), n)
+    c.gen(n[0])
+    doAssert(c.forks.len == oldLen)
+elif false:
   proc genWhile(c: var Con; n: PNode) =
     # We unroll every loop 3 times. We emulate 0, 1, 2 iterations
     # through the loop. We need to prove this is correct for our
