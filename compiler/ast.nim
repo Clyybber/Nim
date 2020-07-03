@@ -221,6 +221,7 @@ type
     nkBreakState,         # special break statement for easier code generation
     nkFuncDef,            # a func
     nkTupleConstr         # a tuple constructor
+    nkEarlySemArg         # When an argument was semmed early, but we might need the untyped AST later, the semmed AST is the first, the unsemmed the second son
 
   TNodeKinds* = set[TNodeKind]
 
