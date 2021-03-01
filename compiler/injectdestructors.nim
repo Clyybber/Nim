@@ -85,24 +85,77 @@ proc aliasesCached(cache: var AliasCache, obj, field: PNode): AliasKind =
 template setCopy(x): untyped =
   var copy = x; copy
 
-proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache, until: int):
+proc unify(a, b: tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ]):
     tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ] =
-  var paths: seq[tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ]]
+
+  template oldPotLastReads: untyped = a.oldPotLastReads + b.oldPotLastReads
+
+  var lastReads = a.oldLastReads + b.oldLastReads #initIntSet()
+  var potLastReads = initIntSet()
+
+  # Add those last reads that were turned into last reads on both branches
+  lastReads.incl a.lastReads * b.lastReads
+  # Add those last reads that were turned into last reads on only one branch,
+  # but where the read operation itself also belongs to only that branch
+  lastReads.incl (a.lastReads + b.lastReads) - oldPotLastReads
+
+  potLastReads.incl a.potLastReads + b.potLastReads
+
+  # Remove potential last reads that were invalidated in a branch,
+  # but don't remove those which were turned into last reads on that branch
+  potLastReads.excl ((oldPotLastReads - a.potLastReads) - a.lastReads)
+  potLastReads.excl ((oldPotLastReads - b.potLastReads) - b.lastReads)
+
+  #assert a.pc == b.pc
+  result.pc = a.pc
+  result.lastReads = lastReads
+  result.potLastReads = potLastReads
+  result.oldPotLastReads = oldPotLastReads #potLastReads
+  result.oldLastReads = a.oldLastReads
+  # echo "a.lastReads: ",a.lastReads
+  # echo "b.lastReads: ",b.lastReads
+  # echo "lastReads: ",result.lastReads
+  # echo "a.potLastReads: ",a.potLastReads
+  # echo "b.potLastReads: ",b.potLastReads
+  # echo "potLastReads: ",result.potLastReads
+
+proc shortestBranch(paths: seq[tuple[ pc: int, lastReads, potLastReads, oldPotLastReads, oldLastReads: IntSet ]]): int =
+  result = 0
+  for i in 1..<paths.len:
+    if paths[i].pc < paths[result].pc:
+      result = i
+  # result = if paths.len < 2 or paths[^1] < paths[^2]: paths.high
+  #          else: paths.high - 1
+
+proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache):
+    tuple[ pc: int, lastReads, potLastReads, oldPotLastReads, oldLastReads: IntSet ] =
+  var paths: seq[tuple[ pc: int, lastReads, potLastReads, oldPotLastReads, oldLastReads: IntSet ]]
   paths.add (0, initIntSet(), initIntSet(), initIntSet(), initIntSet())
 
-  template aliasesCached(obj, field: PNode): untyped =
-    aliasesCached(cache, obj, field)
+  template aliasesCached(obj, field: PNode): untyped = aliasesCached(cache, obj, field)
+
   while true:
-    var index: int = -1 # Get index of earliest path
-    for i, (pc, _, _, _, _) in paths:
-      if index == -1 or pc < paths[index].pc:
-        index = i
+    var index = shortestBranch(paths)
 
     template pc: untyped = paths[index].pc
     template lastReads: untyped = paths[index].lastReads
     template potLastReads: untyped = paths[index].potLastReads
 
-    if pc >= until: return paths[index]
+    if pc >= cfg.len:
+      result = paths[0]
+      for i in 1..<paths.len:
+        result = unify(result, paths[i])
+      return result
+
+    block unify:
+      var i = 0
+      while i < paths.len:
+        if pc == paths[i].pc and i != index:
+          paths[index] = unify(paths[i], paths[index])
+          paths.delete i
+          if index > i: dec index
+        else:
+          inc i
 
     case cfg[pc].kind
     of def:
@@ -133,51 +186,6 @@ proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache, until: int):
       paths.add (pc + 1, initIntSet(), potLastReads, potLastReads, lastReads)
       paths.add (pc + cfg[pc].dest, initIntSet(), potLastReads, potLastReads, lastReads)
       paths.delete index
-
-    index = -1 # Get index of earliest path
-    for i, (pc, _, _, _, _) in paths:
-      if index == -1 or pc < paths[index].pc:
-        index = i
-
-    if pc >= until: return paths[index]
-
-    block unify:
-      var i = 0
-      while i < paths.len:
-        if pc == paths[i].pc and i != index:
-          template lastReadsA: untyped = paths[i].lastReads
-          template potLastReadsA: untyped = paths[i].potLastReads
-
-          template lastReadsB: untyped = paths[index].lastReads
-          template potLastReadsB: untyped = paths[index].potLastReads
-
-          template oldPotLastReads: untyped = paths[i].oldPotLastReads + paths[index].oldPotLastReads
-
-          var lastReads = paths[i].oldLastReads + paths[index].oldLastReads #initIntSet()
-          var potLastReads = initIntSet()
-
-          # Add those last reads that were turned into last reads on both branches
-          lastReads.incl lastReadsA * lastReadsB
-          # Add those last reads that were turned into last reads on only one branch,
-          # but where the read operation itself also belongs to only that branch
-          lastReads.incl (lastReadsA + lastReadsB) - potLastReads
-
-          potLastReads.incl potLastReadsA + potLastReadsB
-
-          # Remove potential last reads that were invalidated in a branch,
-          # but don't remove those which were turned into last reads on that branch
-          potLastReads.excl ((oldPotLastReads - potLastReadsA) - lastReadsA)
-          potLastReads.excl ((oldPotLastReads - potLastReadsB) - lastReadsB)
-
-          paths[index].lastReads = lastReads
-          paths[index].potLastReads = potLastReads
-          paths[index].oldPotLastReads = potLastReads
-
-          paths.delete i
-          if index > i: dec index
-          dec i
-        inc i
-
 
 proc collectFirstWrites(cfg: ControlFlowGraph; alreadySeen: var HashSet[PNode]; pc: var int, until: int) =
   while pc < until:
@@ -1144,7 +1152,9 @@ proc injectDestructorCalls*(g: ModuleGraph; idgen: IdGenerator; owner: PSym; n: 
     var cache = initTable[(PNode, PNode), AliasKind]()
     #var lastReads, potLastReads: IntSet
     #var pc = 0
-    var (_, lastReads, potLastReads, _, _) = collectLastReads(c.g, cache, c.g.len)
+    var (_, lastReads, potLastReads, oldPotLastReads, oldLastReads) = collectLastReads(c.g, cache)
+    lastReads.incl oldLastReads #?
+    #lastReads.incl oldPotLastReads #?
     lastReads.incl potLastReads
     var lastReadTable: Table[PNode, seq[int]]
     for position, node in c.g:
