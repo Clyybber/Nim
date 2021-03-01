@@ -82,14 +82,31 @@ proc aliasesCached(cache: var AliasCache, obj, field: PNode): AliasKind =
     cache[key] = aliases(obj, field)
   cache[key]
 
-proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache, lastReads, potLastReads: var IntSet; pc: var int, until: int) =
+template setCopy(x): untyped =
+  var copy = x; copy
+
+proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache, until: int):
+    tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ] =
+  var paths: seq[tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ]]
+  paths.add (0, initIntSet(), initIntSet(), initIntSet(), initIntSet())
+
   template aliasesCached(obj, field: PNode): untyped =
     aliasesCached(cache, obj, field)
-  while pc < until:
+  while true:
+    var index: int = -1 # Get index of earliest path
+    for i, (pc, _, _, _, _) in paths:
+      if index == -1 or pc < paths[index].pc:
+        index = i
+
+    template pc: untyped = paths[index].pc
+    template lastReads: untyped = paths[index].lastReads
+    template potLastReads: untyped = paths[index].potLastReads
+
+    if pc >= until: return paths[index]
+
     case cfg[pc].kind
     of def:
-      let potLastReadsCopy = potLastReads
-      for r in potLastReadsCopy:
+      for r in potLastReads.setCopy:
         if cfg[pc].n.aliasesCached(cfg[r].n) == yes:
           # the path leads to a redefinition of 's' --> sink 's'.
           lastReads.incl r
@@ -102,8 +119,7 @@ proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache, lastReads, p
 
       inc pc
     of use:
-      let potLastReadsCopy = potLastReads
-      for r in potLastReadsCopy:
+      for r in potLastReads.setCopy:
         if cfg[pc].n.aliasesCached(cfg[r].n) != no or cfg[r].n.aliasesCached(cfg[pc].n) != no:
           cfg[r].n.comment = '\n' & $pc
           potLastReads.excl r
@@ -114,33 +130,54 @@ proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache, lastReads, p
     of goto:
       pc += cfg[pc].dest
     of fork:
-      var variantA = pc + 1
-      var variantB = pc + cfg[pc].dest
-      var potLastReadsA, potLastReadsB = potLastReads
-      var lastReadsA, lastReadsB: IntSet
-      while variantA != variantB and max(variantA, variantB) < cfg.len and min(variantA, variantB) < until:
-        if variantA < variantB:
-          collectLastReads(cfg, cache, lastReadsA, potLastReadsA, variantA, min(variantB, until))
-        else:
-          collectLastReads(cfg, cache, lastReadsB, potLastReadsB, variantB, min(variantA, until))
+      paths.add (pc + 1, initIntSet(), potLastReads, potLastReads, lastReads)
+      paths.add (pc + cfg[pc].dest, initIntSet(), potLastReads, potLastReads, lastReads)
+      paths.delete index
 
-      # Add those last reads that were turned into last reads on both branches
-      lastReads.incl lastReadsA * lastReadsB
-      # Add those last reads that were turned into last reads on only one branch,
-      # but where the read operation itself also belongs to only that branch
-      lastReads.incl (lastReadsA + lastReadsB) - potLastReads
+    index = -1 # Get index of earliest path
+    for i, (pc, _, _, _, _) in paths:
+      if index == -1 or pc < paths[index].pc:
+        index = i
 
-      let oldPotLastReads = potLastReads
-      potLastReads = initIntSet()
+    if pc >= until: return paths[index]
 
-      potLastReads.incl potLastReadsA + potLastReadsB
+    block unify:
+      var i = 0
+      while i < paths.len:
+        if pc == paths[i].pc and i != index:
+          template lastReadsA: untyped = paths[i].lastReads
+          template potLastReadsA: untyped = paths[i].potLastReads
 
-      # Remove potential last reads that were invalidated in a branch,
-      # but don't remove those which were turned into last reads on that branch
-      potLastReads.excl ((oldPotLastReads - potLastReadsA) - lastReadsA)
-      potLastReads.excl ((oldPotLastReads - potLastReadsB) - lastReadsB)
+          template lastReadsB: untyped = paths[index].lastReads
+          template potLastReadsB: untyped = paths[index].potLastReads
 
-      pc = min(variantA, variantB)
+          template oldPotLastReads: untyped = paths[i].oldPotLastReads + paths[index].oldPotLastReads
+
+          var lastReads = paths[i].oldLastReads + paths[index].oldLastReads #initIntSet()
+          var potLastReads = initIntSet()
+
+          # Add those last reads that were turned into last reads on both branches
+          lastReads.incl lastReadsA * lastReadsB
+          # Add those last reads that were turned into last reads on only one branch,
+          # but where the read operation itself also belongs to only that branch
+          lastReads.incl (lastReadsA + lastReadsB) - potLastReads
+
+          potLastReads.incl potLastReadsA + potLastReadsB
+
+          # Remove potential last reads that were invalidated in a branch,
+          # but don't remove those which were turned into last reads on that branch
+          potLastReads.excl ((oldPotLastReads - potLastReadsA) - lastReadsA)
+          potLastReads.excl ((oldPotLastReads - potLastReadsB) - lastReadsB)
+
+          paths[index].lastReads = lastReads
+          paths[index].potLastReads = potLastReads
+          paths[index].oldPotLastReads = potLastReads
+
+          paths.delete i
+          if index > i: dec index
+          dec i
+        inc i
+
 
 proc collectFirstWrites(cfg: ControlFlowGraph; alreadySeen: var HashSet[PNode]; pc: var int, until: int) =
   while pc < until:
@@ -1105,9 +1142,9 @@ proc injectDestructorCalls*(g: ModuleGraph; idgen: IdGenerator; owner: PSym; n: 
 
   block:
     var cache = initTable[(PNode, PNode), AliasKind]()
-    var lastReads, potLastReads: IntSet
-    var pc = 0
-    collectLastReads(c.g, cache, lastReads, potLastReads, pc, c.g.len)
+    #var lastReads, potLastReads: IntSet
+    #var pc = 0
+    var (_, lastReads, potLastReads, _, _) = collectLastReads(c.g, cache, c.g.len)
     lastReads.incl potLastReads
     var lastReadTable: Table[PNode, seq[int]]
     for position, node in c.g:
@@ -1121,7 +1158,7 @@ proc injectDestructorCalls*(g: ModuleGraph; idgen: IdGenerator; owner: PSym; n: 
         node.flags.incl nfLastRead
 
     var alreadySeen: HashSet[PNode]
-    pc = 0
+    var pc = 0
     collectFirstWrites(c.g, alreadySeen, pc, c.g.len)
 
   var scope: Scope
