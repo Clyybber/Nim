@@ -88,9 +88,9 @@ template setCopy(x): untyped =
 proc unify(a, b: tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ]):
     tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastReads, oldLastReads: IntSet ] =
 
-  template oldPotLastReads: untyped = a.oldPotLastReads + b.oldPotLastReads
+  template oldPotLastReads: untyped = a.oldPotLastReads + b.oldPotLastReads # intersection??
 
-  var lastReads = a.oldLastReads + b.oldLastReads #initIntSet()
+  var lastReads = a.oldLastReads + b.oldLastReads # intersection??
   var potLastReads = initIntSet()
 
   # Add those last reads that were turned into last reads on both branches
@@ -110,14 +110,17 @@ proc unify(a, b: tuple[ pc: int, lastReads, potLastReads: IntSet, oldPotLastRead
   result.pc = a.pc
   result.lastReads = lastReads
   result.potLastReads = potLastReads
-  result.oldPotLastReads = oldPotLastReads #potLastReads
-  result.oldLastReads = a.oldLastReads
-  # echo "a.lastReads: ",a.lastReads
-  # echo "b.lastReads: ",b.lastReads
-  # echo "lastReads: ",result.lastReads
-  # echo "a.potLastReads: ",a.potLastReads
-  # echo "b.potLastReads: ",b.potLastReads
-  # echo "potLastReads: ",result.potLastReads
+  result.oldPotLastReads = oldPotLastReads #a.oldPotLastReads * b.oldPotLastReads #oldPotLastReads #potLastReads
+  result.oldLastReads = a.oldLastReads + b.oldLastReads + lastReads
+  echo "a.lastReads: ",a.lastReads
+  echo "b.lastReads: ",b.lastReads
+  echo "lastReads: ",result.lastReads
+  echo "a.potLastReads: ",a.potLastReads
+  echo "b.potLastReads: ",b.potLastReads
+  echo "potLastReads: ",result.potLastReads
+  echo "oldPotLastReads: ",result.oldPotLastReads
+  echo "a.oldPotLastReads: ",a.oldPotLastReads
+  echo "a.oldPotLastReads: ",b.oldPotLastReads
 
 proc shortestBranch(paths: seq[tuple[ pc: int, lastReads, potLastReads, oldPotLastReads, oldLastReads: IntSet ]]): int =
   result = 0
@@ -151,6 +154,7 @@ proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache):
       var i = 0
       while i < paths.len:
         if pc == paths[i].pc and i != index:
+          echo "unify at: ",pc
           paths[index] = unify(paths[i], paths[index])
           paths.delete i
           if index > i: dec index
@@ -183,6 +187,7 @@ proc collectLastReads(cfg: ControlFlowGraph; cache: var AliasCache):
     of goto:
       pc += cfg[pc].dest
     of fork:
+      echo "fork at: ",pc," :::",potLastReads
       paths.add (pc + 1, initIntSet(), potLastReads, potLastReads, lastReads)
       paths.add (pc + cfg[pc].dest, initIntSet(), potLastReads, potLastReads, lastReads)
       paths.delete index
@@ -1153,8 +1158,7 @@ proc injectDestructorCalls*(g: ModuleGraph; idgen: IdGenerator; owner: PSym; n: 
     #var lastReads, potLastReads: IntSet
     #var pc = 0
     var (_, lastReads, potLastReads, oldPotLastReads, oldLastReads) = collectLastReads(c.g, cache)
-    lastReads.incl oldLastReads #?
-    #lastReads.incl oldPotLastReads #?
+    lastReads.incl oldLastReads
     lastReads.incl potLastReads
     var lastReadTable: Table[PNode, seq[int]]
     for position, node in c.g:
