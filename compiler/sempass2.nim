@@ -16,7 +16,7 @@ when defined(useDfa):
   import dfa
 
 import liftdestructors
-include sinkparameter_inference
+import sinkparameter_inference
 
 #[ Second semantic checking pass over the AST. Necessary because the old
    way had some inherent problems. Performs:

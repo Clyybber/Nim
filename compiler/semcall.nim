@@ -8,7 +8,14 @@
 #
 
 ## This module implements semantic checking for calls.
-# included from sem.nim
+
+import
+  ast, strutils, options, msgs, idents, renderer, types,
+  magicsys, lookups, semdata, semtypinst, sigmatch,
+  lineinfos, strtabs, modulegraphs, astmsgs
+
+import sem
+import seminst
 
 from algorithm import sort
 
@@ -34,7 +41,9 @@ proc sameMethodDispatcher(a, b: PSym): bool =
       # be disambiguated by the programmer; this way the right generic is
       # instantiated.
 
-proc determineType(c: PContext, s: PSym)
+# FOR NOW IMPORTED FROM SEM
+#from semstmts import determineType
+#proc determineType(c: PContext, s: PSym)
 
 proc initCandidateSymbols(c: PContext, headSymbol: PNode,
                           initialBinding: PNode,
@@ -156,7 +165,7 @@ proc effectProblem(f, a: PType; result: var string; c: PContext) =
         if not c.graph.compatibleProps(c.graph, f, a):
           result.add "\n  The `.requires` or `.ensures` properties are incompatible."
 
-proc renderNotLValue(n: PNode): string =
+proc renderNotLValue*(n: PNode): string =
   result = $n
   let n = if n.kind == nkHiddenDeref: n[0] else: n
   if n.kind == nkHiddenCallConv and n.len > 1:
@@ -273,10 +282,10 @@ proc presentFailedCandidates(c: PContext, n: PNode, errors: CandidateErrors):
 const
   errTypeMismatch = "type mismatch: got <"
   errButExpected = "but expected one of:"
-  errUndeclaredField = "undeclared field: '$1'"
+  errUndeclaredField* = "undeclared field: '$1'"
   errUndeclaredRoutine = "attempting to call undeclared routine: '$1'"
   errBadRoutine = "attempting to call routine: '$1'$2"
-  errAmbiguousCallXYZ = "ambiguous call; both $1 and $2 match for: $3"
+  errAmbiguousCallXYZ* = "ambiguous call; both $1 and $2 match for: $3"
 
 proc notFoundError*(c: PContext, n: PNode, errors: CandidateErrors) =
   # Gives a detailed error message; this is separated from semOverloadedCall,
@@ -298,7 +307,7 @@ proc notFoundError*(c: PContext, n: PNode, errors: CandidateErrors) =
     result.add("\n" & errButExpected & "\n" & candidates)
   localError(c.config, n.info, result & "\nexpression: " & $n)
 
-proc bracketNotFoundError(c: PContext; n: PNode) =
+proc bracketNotFoundError*(c: PContext; n: PNode) =
   var errors: CandidateErrors = @[]
   var o: TOverloadIter
   let headSymbol = n[0]
@@ -347,7 +356,7 @@ proc getMsgDiagnostic(c: PContext, flags: TExprFlags, n, f: PNode): string =
     if result.len == 0: result = errUndeclaredRoutine % ident
     else: result = errBadRoutine % [ident, result]
 
-proc resolveOverloads(c: PContext, n, orig: PNode,
+proc resolveOverloads*(c: PContext, n, orig: PNode,
                       filter: TSymKinds, flags: TExprFlags,
                       errors: var CandidateErrors,
                       errorsEnabled: bool): TCandidate =
@@ -477,13 +486,13 @@ proc instGenericConvertersSons*(c: PContext, n: PNode, x: TCandidate) =
     for i in 1..<n.len:
       instGenericConvertersArg(c, n[i], x)
 
-proc indexTypesMatch(c: PContext, f, a: PType, arg: PNode): PNode =
+proc indexTypesMatch*(c: PContext, f, a: PType, arg: PNode): PNode =
   var m = newCandidate(c, f)
   result = paramTypesMatch(m, f, a, arg, nil)
   if m.genericConverter and result != nil:
     instGenericConvertersArg(c, result, m)
 
-proc inferWithMetatype(c: PContext, formal: PType,
+proc inferWithMetatype*(c: PContext, formal: PType,
                        arg: PNode, coerceDistincts = false): PNode =
   var m = newCandidate(c, formal)
   m.coerceDistincts = coerceDistincts
@@ -516,7 +525,7 @@ proc updateDefaultParams(call: PNode) =
       if nfDefaultRefsParam in def.flags: call.flags.incl nfDefaultRefsParam
       call[i] = def
 
-proc getCallLineInfo(n: PNode): TLineInfo =
+proc getCallLineInfo*(n: PNode): TLineInfo =
   case n.kind
   of nkAccQuoted, nkBracketExpr, nkCall, nkCallStrLit, nkCommand:
     if len(n) > 0:
@@ -528,7 +537,7 @@ proc getCallLineInfo(n: PNode): TLineInfo =
     discard
   result = n.info
 
-proc semResolvedCall(c: PContext, x: TCandidate,
+proc semResolvedCall*(c: PContext, x: TCandidate,
                      n: PNode, flags: TExprFlags): PNode =
   assert x.state == csMatch
   var finalCallee = x.calleeSym
@@ -571,16 +580,16 @@ proc semResolvedCall(c: PContext, x: TCandidate,
   result.typ = finalCallee.typ[0]
   updateDefaultParams(result)
 
-proc canDeref(n: PNode): bool {.inline.} =
+proc canDeref*(n: PNode): bool {.inline.} =
   result = n.len >= 2 and (let t = n[1].typ;
     t != nil and t.skipTypes({tyGenericInst, tyAlias, tySink}).kind in {tyPtr, tyRef})
 
-proc tryDeref(n: PNode): PNode =
+proc tryDeref*(n: PNode): PNode =
   result = newNodeI(nkHiddenDeref, n.info)
   result.typ = n.typ.skipTypes(abstractInst)[0]
   result.add n
 
-proc semOverloadedCall(c: PContext, n, nOrig: PNode,
+proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
                        filter: TSymKinds, flags: TExprFlags): PNode {.nosinks.} =
   var errors: CandidateErrors = @[] # if efExplain in flags: @[] else: nil
   var r = resolveOverloads(c, n, nOrig, filter, flags, errors, efExplain in flags)
@@ -649,7 +658,7 @@ proc explicitGenericSym(c: PContext, n: PNode, s: PSym): PNode =
   onUse(info, s)
   result = newSymNode(newInst, info)
 
-proc explicitGenericInstantiation(c: PContext, n: PNode, s: PSym): PNode =
+proc explicitGenericInstantiation*(c: PContext, n: PNode, s: PSym): PNode =
   assert n.kind == nkBracketExpr
   for i in 1..<n.len:
     let e = semExpr(c, n[i])
@@ -691,7 +700,7 @@ proc explicitGenericInstantiation(c: PContext, n: PNode, s: PSym): PNode =
   else:
     result = explicitGenericInstError(c, n)
 
-proc searchForBorrowProc(c: PContext, startScope: PScope, fn: PSym): PSym =
+proc searchForBorrowProc*(c: PContext, startScope: PScope, fn: PSym): PSym =
   # Searches for the fn in the symbol table. If the parameter lists are suitable
   # for borrowing the sym in the symbol table is returned, else nil.
   # New approach: generate fn(x, y, z) where x, y, z have the proper types

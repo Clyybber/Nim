@@ -10,61 +10,58 @@
 # This module implements the semantic checking pass.
 
 import
-  ast, strutils, options, astalgo, trees,
-  wordrecg, ropes, msgs, idents, renderer, types, platform, math,
-  magicsys, nversion, nimsets, semfold, modulepaths, importer,
-  procfind, lookups, pragmas, passes, semdata, semtypinst, sigmatch,
-  intsets, transf, vmdef, vm, aliases, cgmeth, lambdalifting,
-  evaltempl, patterns, parampatterns, sempass2, linter, semmacrosanity,
-  lowerings, plugins/active, lineinfos, strtabs, int128,
-  isolation_check, typeallowed, modulegraphs, enumtostr, concepts, astmsgs
+  ast, strutils, options, astalgo, msgs, idents,
+  renderer, types, magicsys, semfold, modulepaths,
+  importer, lookups, passes, semdata, semtypinst,
+  sigmatch, intsets, vm, evaltempl, sempass2,
+  semmacrosanity, lineinfos, strtabs, int128,
+  typeallowed, modulegraphs, concepts
 
 when defined(nimfix):
   import nimfix/prettybase
 
-when not defined(leanCompiler):
-  import spawn
-
 # implementation
 
-proc semExpr(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
-proc semExprWithType(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
-proc semExprNoType(c: PContext, n: PNode): PNode
-proc semExprNoDeref(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
-proc semProcBody(c: PContext, n: PNode): PNode
+proc semExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
+proc semExprWithType*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
+proc semExprNoType*(c: PContext, n: PNode): PNode
+proc semExprNoDeref*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
+proc semProcBody*(c: PContext, n: PNode): PNode
 
-proc fitNode(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode
-proc changeType(c: PContext; n: PNode, newType: PType, check: bool)
+proc fitNode*(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode
+proc changeType*(c: PContext; n: PNode, newType: PType, check: bool)
 
-proc semTypeNode(c: PContext, n: PNode, prev: PType): PType
-proc semStmt(c: PContext, n: PNode; flags: TExprFlags): PNode
-proc semOpAux(c: PContext, n: PNode)
-proc semParamList(c: PContext, n, genericParams: PNode, s: PSym)
-proc addParams(c: PContext, n: PNode, kind: TSymKind)
-proc maybeAddResult(c: PContext, s: PSym, n: PNode)
+proc setGenericParamsMisc*(c: PContext; n: PNode)
+#proc semTypeNode*(c: PContext, n: PNode, prev: PType): PType
+proc semStmt*(c: PContext, n: PNode; flags: TExprFlags): PNode
+proc semOpAux*(c: PContext, n: PNode)
+proc semParamList*(c: PContext, n, genericParams: PNode, s: PSym)
+#proc addParams(c: PContext, n: PNode, kind: TSymKind)
+proc maybeAddResult*(c: PContext, s: PSym, n: PNode)
 proc tryExpr(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
-proc activate(c: PContext, n: PNode)
-proc semQuoteAst(c: PContext, n: PNode): PNode
-proc finishMethod(c: PContext, s: PSym)
+#proc activate(c: PContext, n: PNode)
+#proc semQuoteAst(c: PContext, n: PNode): PNode
+proc finishMethod*(c: PContext, s: PSym)
 proc evalAtCompileTime(c: PContext, n: PNode): PNode
-proc indexTypesMatch(c: PContext, f, a: PType, arg: PNode): PNode
-proc semStaticExpr(c: PContext, n: PNode): PNode
-proc semStaticType(c: PContext, childNode: PNode, prev: PType): PType
-proc semTypeOf(c: PContext; n: PNode): PNode
-proc computeRequiresInit(c: PContext, t: PType): bool
-proc defaultConstructionError(c: PContext, t: PType, info: TLineInfo)
-proc hasUnresolvedArgs(c: PContext, n: PNode): bool
-proc isArrayConstr(n: PNode): bool {.inline.} =
+#from semcall import indexTypesMatch
+#proc indexTypesMatch*(c: PContext, f, a: PType, arg: PNode): PNode
+#proc semStaticExpr(c: PContext, n: PNode): PNode
+#proc semStaticType(c: PContext, childNode: PNode, prev: PType): PType
+#proc semTypeOf(c: PContext; n: PNode): PNode
+proc computeRequiresInit*(c: PContext, t: PType): bool
+proc defaultConstructionError*(c: PContext, t: PType, info: TLineInfo)
+proc hasUnresolvedArgs*(c: PContext, n: PNode): bool
+proc isArrayConstr*(n: PNode): bool {.inline.} =
   result = n.kind == nkBracket and
     n.typ.skipTypes(abstractInst).kind == tyArray
 
-template semIdeForTemplateOrGenericCheck(conf, n, requiresCheck) =
+template semIdeForTemplateOrGenericCheck*(conf, n, requiresCheck) =
   # we check quickly if the node is where the cursor is
   when defined(nimsuggest):
     if n.info.fileIndex == conf.m.trackPos.fileIndex and n.info.line == conf.m.trackPos.line:
       requiresCheck = true
 
-template semIdeForTemplateOrGeneric(c: PContext; n: PNode;
+template semIdeForTemplateOrGeneric*(c: PContext; n: PNode;
                                     requiresCheck: bool) =
   # use only for idetools support; this is pretty slow so generics and
   # templates perform some quick check whether the cursor is actually in
@@ -75,12 +72,27 @@ template semIdeForTemplateOrGeneric(c: PContext; n: PNode;
       #  echo "passing to safeSemExpr: ", renderTree(n)
       discard safeSemExpr(c, n)
 
-proc fitNodePostMatch(c: PContext, formal: PType, arg: PNode): PNode =
+proc fitNodePostMatch*(c: PContext, formal: PType, arg: PNode): PNode =
   let x = arg.skipConv
   if x.kind in {nkPar, nkTupleConstr, nkCurly} and formal.kind != tyUntyped:
     changeType(c, x, formal, check=true)
   result = arg
   result = skipHiddenSubConv(result, c.graph, c.idgen)
+
+# For hlo:
+proc semDirectOp*(c: PContext, n: PNode, flags: TExprFlags): PNode
+proc semTemplateExpr*(c: PContext, n: PNode, s: PSym,
+                     flags: TExprFlags = {}): PNode
+proc semMacroExpr*(c: PContext, n, nOrig: PNode, sym: PSym,
+                  flags: TExprFlags = {}): PNode
+
+# For seminst:
+proc paramsTypeCheck*(c: PContext, typ: PType) {.inline.}
+
+# For semcall:
+proc determineType*(c: PContext, s: PSym)
+
+import hlo, seminst, semcall
 
 
 proc fitNode(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode =
@@ -100,7 +112,7 @@ proc fitNode(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode =
     else:
       result = fitNodePostMatch(c, formal, result)
 
-proc fitNodeForLocalVar(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode =
+proc fitNodeForLocalVar*(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode =
   let a = fitNode(c, formal, arg, info)
   if formal.kind in {tyVar, tyLent}:
     #classifyViewType(formal) != noView:
@@ -108,9 +120,6 @@ proc fitNodeForLocalVar(c: PContext, formal: PType, arg: PNode; info: TLineInfo)
     result.add a
   else:
    result = a
-
-proc inferWithMetatype(c: PContext, formal: PType,
-                       arg: PNode, coerceDistincts = false): PNode
 
 template commonTypeBegin*(): PType = PType(kind: tyUntyped)
 
@@ -188,7 +197,7 @@ proc commonType*(c: PContext; x, y: PType): PType =
         result = newType(k, nextTypeId(c.idgen), r.owner)
         result.addSonSkipIntLit(r, c.idgen)
 
-proc endsInNoReturn(n: PNode): bool =
+proc endsInNoReturn*(n: PNode): bool =
   # check if expr ends in raise exception or call of noreturn proc
   var it = n
   while it.kind in {nkStmtList, nkStmtListExpr} and it.len > 0:
@@ -201,7 +210,7 @@ proc commonType*(c: PContext; x: PType, y: PNode): PType =
   if endsInNoReturn(y): return x
   commonType(c, x, y.typ)
 
-proc newSymS(kind: TSymKind, n: PNode, c: PContext): PSym =
+proc newSymS*(kind: TSymKind, n: PNode, c: PContext): PSym =
   result = newSym(kind, considerQuotedIdent(c, n), nextSymId c.idgen, getCurrOwner(c), n.info)
   when defined(nimsuggest):
     suggestDecl(c, n, result)
@@ -231,13 +240,14 @@ proc newSymG*(kind: TSymKind, n: PNode, c: PContext): PSym =
   when defined(nimsuggest):
     suggestDecl(c, n, result)
 
-proc semIdentVis(c: PContext, kind: TSymKind, n: PNode,
-                 allowed: TSymFlags): PSym
-  # identifier with visibility
-proc semIdentWithPragma(c: PContext, kind: TSymKind, n: PNode,
-                        allowed: TSymFlags): PSym
+# proc semIdentVis*(c: PContext, kind: TSymKind, n: PNode,
+#                  allowed: TSymFlags): PSym
+#   # identifier with visibility
 
-proc typeAllowedCheck(c: PContext; info: TLineInfo; typ: PType; kind: TSymKind;
+#proc semIdentWithPragma(c: PContext, kind: TSymKind, n: PNode,
+#                        allowed: TSymFlags): PSym
+
+proc typeAllowedCheck*(c: PContext; info: TLineInfo; typ: PType; kind: TSymKind;
                       flags: TTypeAllowedFlags = {}) =
   let t = typeAllowed(typ, kind, c, flags)
   if t != nil:
@@ -251,24 +261,19 @@ proc typeAllowedCheck(c: PContext; info: TLineInfo; typ: PType; kind: TSymKind;
               typeToString(typ), toHumanStr(kind)]
     localError(c.config, info, err)
 
-proc paramsTypeCheck(c: PContext, typ: PType) {.inline.} =
+proc paramsTypeCheck*(c: PContext, typ: PType) {.inline.} =
   typeAllowedCheck(c, typ.n.info, typ, skProc)
 
-proc expectMacroOrTemplateCall(c: PContext, n: PNode): PSym
-proc semDirectOp(c: PContext, n: PNode, flags: TExprFlags): PNode
-proc semWhen(c: PContext, n: PNode, semCheck: bool = true): PNode
-proc semTemplateExpr(c: PContext, n: PNode, s: PSym,
-                     flags: TExprFlags = {}): PNode
-proc semMacroExpr(c: PContext, n, nOrig: PNode, sym: PSym,
-                  flags: TExprFlags = {}): PNode
+#proc expectMacroOrTemplateCall(c: PContext, n: PNode): PSym
+proc semWhen*(c: PContext, n: PNode, semCheck: bool = true): PNode
 
-proc symFromType(c: PContext; t: PType, info: TLineInfo): PSym =
+proc symFromType*(c: PContext; t: PType, info: TLineInfo): PSym =
   if t.sym != nil: return t.sym
   result = newSym(skType, getIdent(c.cache, "AnonType"), nextSymId c.idgen, t.owner, info)
   result.flags.incl sfAnon
   result.typ = t
 
-proc symNodeFromType(c: PContext, t: PType, info: TLineInfo): PNode =
+proc symNodeFromType*(c: PContext, t: PType, info: TLineInfo): PNode =
   result = newSymNode(symFromType(c, t, info), info)
   result.typ = makeTypeDesc(c, t)
 
@@ -295,7 +300,7 @@ proc hasCycle(n: PNode): bool =
       break
   excl n.flags, nfNone
 
-proc fixupTypeAfterEval(c: PContext, evaluated, eOrig: PNode): PNode =
+proc fixupTypeAfterEval*(c: PContext, evaluated, eOrig: PNode): PNode =
   # recompute the types as 'eval' isn't guaranteed to construct types nor
   # that the types are sound:
   when true:
@@ -320,7 +325,7 @@ proc fixupTypeAfterEval(c: PContext, evaluated, eOrig: PNode): PNode =
          isArrayConstr(arg):
         arg.typ = eOrig.typ
 
-proc tryConstExpr(c: PContext, n: PNode): PNode =
+proc tryConstExpr*(c: PContext, n: PNode): PNode =
   var e = semExprWithType(c, n)
   if e == nil: return
 
@@ -349,9 +354,9 @@ proc tryConstExpr(c: PContext, n: PNode): PNode =
   c.config.m.errorOutputs = oldErrorOutputs
 
 const
-  errConstExprExpected = "constant expression expected"
+  errConstExprExpected* = "constant expression expected"
 
-proc semConstExpr(c: PContext, n: PNode): PNode =
+proc semConstExpr*(c: PContext, n: PNode): PNode =
   var e = semExprWithType(c, n)
   if e == nil:
     localError(c.config, n.info, errConstExprExpected)
@@ -372,7 +377,7 @@ proc semConstExpr(c: PContext, n: PNode): PNode =
     else:
       result = fixupTypeAfterEval(c, result, e)
 
-proc semExprFlagDispatched(c: PContext, n: PNode, flags: TExprFlags): PNode =
+proc semExprFlagDispatched*(c: PContext, n: PNode, flags: TExprFlags): PNode =
   if efNeedStatic in flags:
     if efPreferNilResult in flags:
       return tryConstExpr(c, n)
@@ -389,14 +394,21 @@ proc semExprFlagDispatched(c: PContext, n: PNode, flags: TExprFlags): PNode =
 when not defined(nimHasSinkInference):
   {.pragma: nosinks.}
 
-include hlo, seminst, semcall
-
 proc resetSemFlag(n: PNode) =
   excl n.flags, nfSem
   for i in 0..<n.safeLen:
     resetSemFlag(n[i])
 
-proc semAfterMacroCall(c: PContext, call, macroResult: PNode,
+# For semtypes:
+#proc semGenericStmt*(c: PContext, n: PNode): PNode
+#proc semConceptBody*(c: PContext, n: PNode): PNode
+
+proc forceBool*(c: PContext, n: PNode): PNode
+proc semConstBoolExpr*(c: PContext, n: PNode): PNode
+
+import semtypes
+
+proc semAfterMacroCall*(c: PContext, call, macroResult: PNode,
                        s: PSym, flags: TExprFlags): PNode =
   ## Semantically check the output of a macro.
   ## This involves processes such as re-checking the macro output for type
@@ -456,9 +468,9 @@ proc semAfterMacroCall(c: PContext, call, macroResult: PNode,
 
 const
   errMissingGenericParamsForTemplate = "'$1' has unspecified generic parameters"
-  errFloatToString = "cannot convert '$1' to '$2'"
+  errFloatToString* = "cannot convert '$1' to '$2'"
 
-proc semMacroExpr(c: PContext, n, nOrig: PNode, sym: PSym,
+proc semMacroExpr*(c: PContext, n, nOrig: PNode, sym: PSym,
                   flags: TExprFlags = {}): PNode =
   rememberExpansion(c, nOrig.info, sym)
   pushInfoContext(c.config, nOrig.info, sym.detailedInfo)
@@ -485,21 +497,16 @@ proc semMacroExpr(c: PContext, n, nOrig: PNode, sym: PSym,
   result = wrapInComesFrom(nOrig.info, sym, result)
   popInfoContext(c.config)
 
-proc forceBool(c: PContext, n: PNode): PNode =
+proc forceBool*(c: PContext, n: PNode): PNode =
   result = fitNode(c, getSysType(c.graph, n.info, tyBool), n, n.info)
   if result == nil: result = n
 
-proc semConstBoolExpr(c: PContext, n: PNode): PNode =
+proc semConstBoolExpr*(c: PContext, n: PNode): PNode =
   result = forceBool(c, semConstExpr(c, n))
   if result.kind != nkIntLit:
     localError(c.config, n.info, errConstExprExpected)
 
-proc semGenericStmt(c: PContext, n: PNode): PNode
-proc semConceptBody(c: PContext, n: PNode): PNode
-
-include semtypes
-
-proc setGenericParamsMisc(c: PContext; n: PNode) =
+proc setGenericParamsMisc*(c: PContext; n: PNode) =
   ## used by call defs (procs, templates, macros, ...) to analyse their generic
   ## params, and store the originals in miscPos for better error reporting.
   let orig = n[genericParamsPos]
@@ -518,7 +525,31 @@ proc setGenericParamsMisc(c: PContext; n: PNode) =
   else:
     n[miscPos][1] = orig
 
-include semtempl, semgnrc, semstmts, semexprs
+import semstmts
+import semexprs
+
+# To prevent cycle:
+proc maybeAddResult*(c: PContext, s: PSym, n: PNode) = semstmts.maybeAddResult(c, s, n)
+proc determineType*(c: PContext, s: PSym) = semstmts.determineType(c, s)
+proc semStmt*(c: PContext, n: PNode; flags: TExprFlags): PNode = semstmts.semStmt(c, n, flags)
+proc finishMethod*(c: PContext, s: PSym) = semstmts.finishMethod(c, s)
+proc semParamList*(c: PContext, n, genericParams: PNode, s: PSym) = semstmts.semParamList(c, n, genericParams, s)
+proc tryExpr(c: PContext, n: PNode, flags: TExprFlags = {}): PNode = semexprs.tryExpr(c, n, flags)
+proc semTemplateExpr*(c: PContext, n: PNode, s: PSym,
+                     flags: TExprFlags = {}): PNode = semexprs.semTemplateExpr(c, n, s, flags)
+proc semExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode = semexprs.semExpr(c, n, flags)
+proc semExprNoDeref*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode = semexprs.semExprNoDeref(c, n, flags)
+proc changeType*(c: PContext; n: PNode, newType: PType, check: bool) = semexprs.changeType(c, n, newType, check)
+proc hasUnresolvedArgs*(c: PContext, n: PNode): bool = semexprs.hasUnresolvedArgs(c, n)
+proc semExprWithType*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode = semexprs.semExprWithType(c, n, flags)
+proc semWhen*(c: PContext, n: PNode, semCheck: bool = true): PNode = semexprs.semWhen(c, n, semCheck)
+proc semDirectOp*(c: PContext, n: PNode, flags: TExprFlags): PNode = semexprs.semDirectOp(c, n, flags)
+proc semExprNoType*(c: PContext, n: PNode): PNode = semexprs.semExprNoType(c, n)
+proc semProcBody*(c: PContext, n: PNode): PNode = semexprs.semProcBody(c, n)
+proc semOpAux*(c: PContext, n: PNode) = semexprs.semOpAux(c, n)
+proc defaultConstructionError*(c: PContext, t: PType, info: TLineInfo) = semexprs.defaultConstructionError(c, t, info)
+proc computeRequiresInit*(c: PContext, t: PType): bool = semexprs.computeRequiresInit(c, t)
+proc evalAtCompileTime(c: PContext, n: PNode): PNode = semexprs.evalAtCompileTime(c, n)
 
 proc addCodeForGenerics(c: PContext, n: PNode) =
   for i in c.lastGenericIdx..<c.generics.len:
@@ -538,10 +569,10 @@ proc myOpen(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext 
 
   if c.p != nil: internalError(graph.config, module.info, "sem.myOpen")
   c.semConstExpr = semConstExpr
-  c.semExpr = semExpr
-  c.semTryExpr = tryExpr
+  c.semExpr = semexprs.semExpr
+  c.semTryExpr = semexprs.tryExpr
   c.semTryConstExpr = tryConstExpr
-  c.computeRequiresInit = computeRequiresInit
+  c.computeRequiresInit = semexprs.computeRequiresInit
   c.semOperand = semOperand
   c.semConstBoolExpr = semConstBoolExpr
   c.semOverloadedCall = semOverloadedCall
@@ -549,7 +580,7 @@ proc myOpen(graph: ModuleGraph; module: PSym; idgen: IdGenerator): PPassContext 
   c.semGenerateInstance = generateInstance
   c.semTypeNode = semTypeNode
   c.instTypeBoundOp = sigmatch.instTypeBoundOp
-  c.hasUnresolvedArgs = hasUnresolvedArgs
+  c.hasUnresolvedArgs = semexprs.hasUnresolvedArgs
   c.templInstCounter = new int
 
   pushProcCon(c, module)

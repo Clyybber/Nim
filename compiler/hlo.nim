@@ -9,6 +9,12 @@
 
 # This include implements the high level optimization pass.
 
+import
+  ast, options, trees, msgs, renderer, semdata,
+  transf, evaltempl, patterns, lineinfos, modulegraphs
+
+import sem
+
 proc hlo(c: PContext, n: PNode): PNode
 
 proc evalPattern(c: PContext, n, orig: PNode): PNode =
@@ -90,13 +96,13 @@ proc hlo(c: PContext, n: PNode): PNode =
       result = hlo(c, result)
       result = commonOptimizations(c.graph, c.idgen, c.module, result)
 
-proc hloBody(c: PContext, n: PNode): PNode =
+proc hloBody*(c: PContext, n: PNode): PNode =
   # fast exit:
   if c.patterns.len == 0 or optTrMacros notin c.config.options: return n
   c.hloLoopDetector = 0
   result = hlo(c, n)
 
-proc hloStmt(c: PContext, n: PNode): PNode =
+proc hloStmt*(c: PContext, n: PNode): PNode =
   # fast exit:
   if c.patterns.len == 0 or optTrMacros notin c.config.options: return n
   c.hloLoopDetector = 0

@@ -7,6 +7,9 @@
 #    distribution, for details about the copyright.
 #
 
+import
+  ast, msgs, renderer, idents, strutils, options, lineinfos
+
 proc checkForSink*(config: ConfigRef; idgen: IdGenerator; owner: PSym; arg: PNode) =
   #[ Patterns we seek to detect:
 

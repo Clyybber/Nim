@@ -7,7 +7,15 @@
 #    distribution, for details about the copyright.
 #
 
-# included from sem.nim
+import
+  ast, strutils, options, astalgo, trees, wordrecg,
+  ropes, msgs, idents, renderer, semfold, procfind,
+  lookups, pragmas, semdata, sigmatch, intsets, linter,
+  lineinfos, strtabs, int128, modulegraphs
+
+import sem
+from semtypes import semIdentVis
+from semcall import getCallLineInfo
 
 discard """
   hygienic templates:
@@ -27,7 +35,7 @@ discard """
 """
 
 const
-  errImplOfXNotAllowed = "implementation of '$1' is not allowed"
+  errImplOfXNotAllowed* = "implementation of '$1' is not allowed"
 
 type
   TSymBinding = enum
@@ -44,10 +52,10 @@ proc symBinding(n: PNode): TSymBinding =
       else: discard
 
 type
-  TSymChoiceRule = enum
+  TSymChoiceRule* = enum
     scClosed, scOpen, scForceOpen
 
-proc symChoice(c: PContext, n: PNode, s: PSym, r: TSymChoiceRule;
+proc symChoice*(c: PContext, n: PNode, s: PSym, r: TSymChoiceRule;
                isField = false): PNode =
   var
     a: PSym
@@ -85,7 +93,7 @@ proc symChoice(c: PContext, n: PNode, s: PSym, r: TSymChoiceRule;
         onUse(info, a)
       a = nextOverloadIter(o, c, n)
 
-proc semBindStmt(c: PContext, n: PNode, toBind: var IntSet): PNode =
+proc semBindStmt*(c: PContext, n: PNode, toBind: var IntSet): PNode =
   result = copyNode(n)
   for i in 0..<n.len:
     var a = n[i]
@@ -108,7 +116,7 @@ proc semBindStmt(c: PContext, n: PNode, toBind: var IntSet): PNode =
     else:
       illFormedAst(a, c.config)
 
-proc semMixinStmt(c: PContext, n: PNode, toMixin: var IntSet): PNode =
+proc semMixinStmt*(c: PContext, n: PNode, toMixin: var IntSet): PNode =
   result = copyNode(n)
   for i in 0..<n.len:
     toMixin.incl(considerQuotedIdent(c, n[i]).id)
@@ -321,7 +329,7 @@ proc semTemplSomeDecl(c: var TemplCtx, n: PNode, symKind: TSymKind; start=0) =
     for j in 0..<a.len-2:
       addLocalDecl(c, a[j], symKind)
 
-proc semPattern(c: PContext, n: PNode): PNode
+proc semPattern*(c: PContext, n: PNode): PNode
 
 proc semTemplBodySons(c: var TemplCtx, n: PNode): PNode =
   result = n
@@ -588,7 +596,7 @@ proc semTemplBodyDirty(c: var TemplCtx, n: PNode): PNode =
     for i in 0..<n.len:
       result[i] = semTemplBodyDirty(c, n[i])
 
-proc semTemplateDef(c: PContext, n: PNode): PNode =
+proc semTemplateDef*(c: PContext, n: PNode): PNode =
   result = n
   var s: PSym
   if isTopLevel(c):

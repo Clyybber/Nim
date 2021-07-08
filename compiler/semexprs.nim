@@ -8,7 +8,32 @@
 #
 
 # this module does the semantic checking for expressions
-# included from sem.nim
+
+import
+  ast, strutils, options, astalgo, trees, wordrecg,
+  ropes, msgs, idents, renderer, types, platform,
+  math, magicsys, nversion, nimsets, semfold, importer,
+  lookups, pragmas, semdata, sigmatch, intsets, vmdef,
+  vm, aliases, lambdalifting, evaltempl, parampatterns,
+  sempass2, linter, lowerings, plugins/active, lineinfos,
+  strtabs, int128, isolation_check, typeallowed,
+  modulegraphs, concepts, astmsgs
+
+when defined(nimfix):
+  import nimfix/prettybase
+
+when not defined(leanCompiler):
+  import spawn
+
+import sem except semStmt
+import semtempl
+import semtypes
+import semcall
+import semstmts
+import seminst
+
+proc semTypeOf(c: PContext; n: PNode): PNode
+proc semStaticExpr(c: PContext, n: PNode): PNode
 
 when defined(nimCompilerStacktraceHints):
   import std/stackframes
@@ -25,7 +50,7 @@ const
   errFieldInitTwice = "field initialized twice: '$1'"
   errUndeclaredFieldX = "undeclared field: '$1'"
 
-proc semTemplateExpr(c: PContext, n: PNode, s: PSym,
+proc semTemplateExpr*(c: PContext, n: PNode, s: PSym,
                      flags: TExprFlags = {}): PNode =
   rememberExpansion(c, n.info, s)
   let info = getCallLineInfo(n)
@@ -48,7 +73,7 @@ template rejectEmptyNode(n: PNode) =
   # No matter what a nkEmpty node is not what we want here
   if n.kind == nkEmpty: illFormedAst(n, c.config)
 
-proc semOperand(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
+proc semOperand*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   rejectEmptyNode(n)
   # same as 'semExprWithType' but doesn't check for proc vars
   result = semExpr(c, n, flags + {efOperand})
@@ -82,7 +107,7 @@ proc semExprCheck(c: PContext, n: PNode, flags: TExprFlags): PNode =
     # do not produce another redundant error message:
     result = errorNode(c, n)
 
-proc semExprWithType(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
+proc semExprWithType*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   result = semExprCheck(c, n, flags)
   if result.typ == nil and efInTypeof in flags:
     result.typ = c.voidType
@@ -96,7 +121,7 @@ proc semExprWithType(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   else:
     if result.typ.kind in {tyVar, tyLent}: result = newDeref(result)
 
-proc semExprNoDeref(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
+proc semExprNoDeref*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   result = semExprCheck(c, n, flags)
   if result.typ == nil:
     localError(c.config, n.info, errExprXHasNoType %
@@ -500,7 +525,7 @@ proc semIs(c: PContext, n: PNode, flags: TExprFlags): PNode =
 
   result = isOpImpl(c, n, flags)
 
-proc semOpAux(c: PContext, n: PNode) =
+proc semOpAux*(c: PContext, n: PNode) =
   const flags = {efDetermineType}
   for i in 1..<n.len:
     var a = n[i]
@@ -524,7 +549,7 @@ proc overloadedCallOpr(c: PContext, n: PNode): PNode =
     for i in 0..<n.len: result.add n[i]
     result = semExpr(c, result)
 
-proc changeType(c: PContext; n: PNode, newType: PType, check: bool) =
+proc changeType*(c: PContext; n: PNode, newType: PType, check: bool) =
   case n.kind
   of nkCurly, nkBracket:
     for i in 0..<n.len:
@@ -661,7 +686,7 @@ proc isUnresolvedSym(s: PSym): bool =
         (s.kind == skType and
         s.typ.flags * {tfGenericTypeParam, tfImplicitTypeParam} != {})
 
-proc hasUnresolvedArgs(c: PContext, n: PNode): bool =
+proc hasUnresolvedArgs*(c: PContext, n: PNode): bool =
   # Checks whether an expression depends on generic parameters that
   # don't have bound values yet. E.g. this could happen in situations
   # such as:
@@ -765,7 +790,7 @@ proc analyseIfAddressTakenInCall(c: PContext, n: PNode) =
 
 include semmagic
 
-proc evalAtCompileTime(c: PContext, n: PNode): PNode =
+proc evalAtCompileTime*(c: PContext, n: PNode): PNode =
   result = n
   if n.kind notin nkCallKinds or n[0].kind != nkSym: return
   var callee = n[0].sym
@@ -1032,7 +1057,7 @@ proc semIndirectOp(c: PContext, n: PNode, flags: TExprFlags): PNode =
     fixAbstractType(c, result)
     analyseIfAddressTakenInCall(c, result)
 
-proc semDirectOp(c: PContext, n: PNode, flags: TExprFlags): PNode =
+proc semDirectOp*(c: PContext, n: PNode, flags: TExprFlags): PNode =
   # this seems to be a hotspot in the compiler!
   let nOrig = n.copyTree
   #semLazyOpAux(c, n)
@@ -1040,7 +1065,7 @@ proc semDirectOp(c: PContext, n: PNode, flags: TExprFlags): PNode =
   if result != nil: result = afterCallActions(c, result, nOrig, flags)
   else: result = errorNode(c, n)
 
-proc buildEchoStmt(c: PContext, n: PNode): PNode =
+proc buildEchoStmt*(c: PContext, n: PNode): PNode =
   # we MUST not check 'n' for semantics again here! But for now we give up:
   result = newNodeI(nkCall, n.info)
   let e = systemModuleSym(c.graph, getIdent(c.cache, "echo"))
@@ -1051,7 +1076,7 @@ proc buildEchoStmt(c: PContext, n: PNode): PNode =
   result.add(n)
   result = semExpr(c, result)
 
-proc semExprNoType(c: PContext, n: PNode): PNode =
+proc semExprNoType*(c: PContext, n: PNode): PNode =
   let isPush = c.config.hasHint(hintExtendedContext)
   if isPush: pushInfoContext(c.config, n.info)
   result = semExpr(c, n, {efWantStmt})
@@ -1814,7 +1839,7 @@ proc semReturn(c: PContext, n: PNode): PNode =
   else:
     localError(c.config, n.info, "'return' not allowed here")
 
-proc semProcBody(c: PContext, n: PNode): PNode =
+proc semProcBody*(c: PContext, n: PNode): PNode =
   openScope(c)
   result = semExpr(c, n)
   if c.p.resultSym != nil and not isEmptyType(result.typ):
@@ -2121,7 +2146,7 @@ proc semQuoteAst(c: PContext, n: PNode): PNode =
      newTreeI(nkCall, n.info, quotes))
   result = semExpandToAst(c, result)
 
-proc tryExpr(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
+proc tryExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   # watch out, hacks ahead:
   when defined(nimsuggest):
     # Remove the error hook so nimsuggest doesn't report errors there
@@ -2352,7 +2377,7 @@ proc semMagic(c: PContext, n: PNode, s: PSym, flags: TExprFlags): PNode =
   else:
     result = semDirectOp(c, n, flags)
 
-proc semWhen(c: PContext, n: PNode, semCheck = true): PNode =
+proc semWhen*(c: PContext, n: PNode, semCheck = true): PNode =
   # If semCheck is set to false, ``when`` will return the verbatim AST of
   # the correct branch. Otherwise the AST will be passed through semStmt.
   result = nil
@@ -2714,7 +2739,7 @@ proc getNilType(c: PContext): PType =
     result.align = c.config.target.ptrSize.int16
     c.nilTypeCache = result
 
-proc semExpr(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
+proc semExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   when defined(nimCompilerStacktraceHints):
     setFrameMsg c.config$n.info & " " & $n.kind
   when false: # see `tdebugutils`

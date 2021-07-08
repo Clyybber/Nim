@@ -15,7 +15,13 @@
 # So we have to eval templates/macros right here so that symbol
 # lookup can be accurate.
 
-# included from sem.nim
+import
+  ast, options, astalgo, ropes, msgs, idents, renderer,
+  semfold, lookups, semdata, sigmatch, intsets, linter,
+  lineinfos, strtabs, int128, modulegraphs
+
+import sem
+import semtempl
 
 proc getIdentNode(c: PContext; n: PNode): PNode =
   case n.kind
@@ -499,14 +505,14 @@ proc semGenericStmt(c: PContext, n: PNode,
   when defined(nimsuggest):
     if withinTypeDesc in flags: dec c.inTypeContext
 
-proc semGenericStmt(c: PContext, n: PNode): PNode =
+proc semGenericStmt*(c: PContext, n: PNode): PNode =
   var ctx: GenericCtx
   ctx.toMixin = initIntSet()
   ctx.toBind = initIntSet()
   result = semGenericStmt(c, n, {}, ctx)
   semIdeForTemplateOrGeneric(c, result, ctx.cursorInBody)
 
-proc semConceptBody(c: PContext, n: PNode): PNode =
+proc semConceptBody*(c: PContext, n: PNode): PNode =
   var ctx: GenericCtx
   ctx.toMixin = initIntSet()
   ctx.toBind = initIntSet()

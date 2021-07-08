@@ -350,13 +350,13 @@ proc initConstrContext(t: PType, initExpr: PNode): ObjConstrContext =
   ObjConstrContext(typ: t, initExpr: initExpr,
                    needsFullInit: tfNeedsFullInit in t.flags)
 
-proc computeRequiresInit(c: PContext, t: PType): bool =
+proc computeRequiresInit*(c: PContext, t: PType): bool =
   assert t.kind == tyObject
   var constrCtx = initConstrContext(t, newNode(nkObjConstr))
   let initResult = semConstructTypeAux(c, constrCtx, {})
   constrCtx.missingFields.len > 0
 
-proc defaultConstructionError(c: PContext, t: PType, info: TLineInfo) =
+proc defaultConstructionError*(c: PContext, t: PType, info: TLineInfo) =
   var objType = t
   while objType.kind notin {tyObject, tyDistinct}:
     objType = objType.lastSon

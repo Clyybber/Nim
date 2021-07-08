@@ -8,17 +8,28 @@
 #
 
 # this module does the semantic checking of type declarations
-# included from sem.nim
+
+import
+  ast, strutils, options, astalgo, trees,
+  wordrecg, ropes, msgs, idents, renderer, types, platform,
+  magicsys, nversion, nimsets, importer,
+  lookups, pragmas, semdata, semtypinst, sigmatch,
+  intsets, parampatterns, sempass2, linter, lineinfos, int128,
+  modulegraphs, enumtostr, concepts
+
+import seminst
+from semcall import semOverloadedCall
+import sem
 
 import math
 
 const
-  errStringOrIdentNodeExpected = "string or ident node expected"
-  errStringLiteralExpected = "string literal expected"
-  errIntLiteralExpected = "integer literal expected"
-  errWrongNumberOfVariables = "wrong number of variables"
+  errStringOrIdentNodeExpected* = "string or ident node expected"
+  errStringLiteralExpected* = "string literal expected"
+  errIntLiteralExpected* = "integer literal expected"
+  errWrongNumberOfVariables* = "wrong number of variables"
   errInvalidOrderInEnumX = "invalid order in enum '$1'"
-  errOrdinalTypeExpected = "ordinal type expected"
+  errOrdinalTypeExpected* = "ordinal type expected"
   errSetTooBig = "set is too large"
   errBaseTypeMustBeOrdinal = "base type of a set must be an ordinal"
   errInheritanceOnlyWithNonFinalObjects = "inheritance only works with non-final objects"
@@ -26,19 +37,21 @@ const
   errArrayExpectsTwoTypeParams = "array expects two type parameters"
   errInvalidVisibilityX = "invalid visibility: '$1'"
   errInitHereNotAllowed = "initialization not allowed here"
-  errXCannotBeAssignedTo = "'$1' cannot be assigned to"
+  errXCannotBeAssignedTo* = "'$1' cannot be assigned to"
   errIteratorNotAllowed = "iterators can only be defined at the module's top level"
-  errXNeedsReturnType = "$1 needs a return type"
-  errNoReturnTypeDeclared = "no return type declared"
-  errTIsNotAConcreteType = "'$1' is not a concrete type"
+  errXNeedsReturnType* = "$1 needs a return type"
+  errNoReturnTypeDeclared* = "no return type declared"
+  errTIsNotAConcreteType* = "'$1' is not a concrete type"
   errTypeExpected = "type expected"
-  errXOnlyAtModuleScope = "'$1' is only allowed at top level"
+  errXOnlyAtModuleScope* = "'$1' is only allowed at top level"
   errDuplicateCaseLabel = "duplicate case label"
   errMacroBodyDependsOnGenericTypes = "the macro body cannot be compiled, " &
     "because the parameter '$1' has a generic type"
   errIllegalRecursionInTypeX = "illegal recursion in type '$1'"
   errNoGenericParamsAllowedForX = "no generic parameters allowed for $1"
   errInOutFlagNotExtern = "the '$1' modifier can be used only with imported types"
+
+proc semTypeNode*(c: PContext, n: PNode, prev: PType): PType
 
 proc newOrPrevType(kind: TTypeKind, prev: PType, c: PContext): PType =
   if prev == nil:
@@ -478,7 +491,7 @@ proc semTuple(c: PContext, n: PNode, prev: PType): PType =
   if isTupleRecursive(result):
     localError(c.config, n.info, errIllegalRecursionInTypeX % typeToString(result))
 
-proc semIdentVis(c: PContext, kind: TSymKind, n: PNode,
+proc semIdentVis*(c: PContext, kind: TSymKind, n: PNode,
                  allowed: TSymFlags): PSym =
   # identifier with visibility
   if n.kind == nkPostfix:
@@ -499,7 +512,9 @@ proc semIdentVis(c: PContext, kind: TSymKind, n: PNode,
   else:
     result = newSymG(kind, n, c)
 
-proc semIdentWithPragma(c: PContext, kind: TSymKind, n: PNode,
+from semgnrc import semConceptBody, semGenericStmt
+
+proc semIdentWithPragma*(c: PContext, kind: TSymKind, n: PNode,
                         allowed: TSymFlags): PSym =
   if n.kind == nkPragmaExpr:
     checkSonsLen(n, 2, c.config)
@@ -554,7 +569,7 @@ proc semCaseBranchSetElem(c: PContext, t, b: PNode,
     result = fitNode(c, t[0].typ, b, b.info)
     inc(covered)
 
-proc semCaseBranch(c: PContext, t, branch: PNode, branchIndex: int,
+proc semCaseBranch*(c: PContext, t, branch: PNode, branchIndex: int,
                    covered: var Int128) =
   let lastIndex = branch.len - 2
   for i in 0..lastIndex:
@@ -595,7 +610,7 @@ proc semCaseBranch(c: PContext, t, branch: PNode, branchIndex: int,
   for i in lastIndex.succ..<branch.len - 1:
     checkForOverlap(c, t, i, branchIndex)
 
-proc toCover(c: PContext, t: PType): Int128 =
+proc toCover*(c: PContext, t: PType): Int128 =
   let t2 = skipTypes(t, abstractVarRange-{tyTypeDesc})
   if t2.kind == tyEnum and enumHasHoles(t2):
     result = toInt128(t2.n.len)
@@ -615,7 +630,7 @@ proc toCover(c: PContext, t: PType): Int128 =
 proc semRecordNodeAux(c: PContext, n: PNode, check: var IntSet, pos: var int,
                       father: PNode, rectype: PType, hasCaseFields = false)
 
-proc getIntSetOfType(c: PContext, t: PType): IntSet =
+proc getIntSetOfType*(c: PContext, t: PType): IntSet =
   result = initIntSet()
   if t.enumHasHoles:
     let t = t.skipTypes(abstractRange)
@@ -626,7 +641,7 @@ proc getIntSetOfType(c: PContext, t: PType): IntSet =
     for i in toInt64(firstOrd(c.config, t))..toInt64(lastOrd(c.config, t)):
       result.incl(i.int)
 
-iterator processBranchVals(b: PNode): int =
+iterator processBranchVals*(b: PNode): int =
   assert b.kind in {nkOfBranch, nkElifBranch, nkElse}
   if b.kind == nkOfBranch:
     for i in 0..<b.len-1:
@@ -636,7 +651,7 @@ iterator processBranchVals(b: PNode): int =
         for i in b[i][0].intVal..b[i][1].intVal:
           yield i.int
 
-proc renderAsType(vals: IntSet, t: PType): string =
+proc renderAsType*(vals: IntSet, t: PType): string =
   result = "{"
   let t = t.skipTypes(abstractRange)
   var enumSymOffset = 0
@@ -659,7 +674,7 @@ proc renderAsType(vals: IntSet, t: PType): string =
     inc(i)
   result &= "}"
 
-proc formatMissingEnums(c: PContext, n: PNode): string =
+proc formatMissingEnums*(c: PContext, n: PNode): string =
   var coveredCases = initIntSet()
   for i in 1..<n.len:
     for val in processBranchVals(n[i]):
@@ -973,7 +988,7 @@ proc findEnforcedStaticType(t: PType): PType =
       let t = findEnforcedStaticType(s)
       if t != nil: return t
 
-proc addParamOrResult(c: PContext, param: PSym, kind: TSymKind) =
+proc addParamOrResult*(c: PContext, param: PSym, kind: TSymKind) =
   if kind == skMacro:
     let staticType = findEnforcedStaticType(param.typ)
     if staticType != nil:
@@ -1025,7 +1040,7 @@ proc addImplicitGeneric(c: PContext; typeClass: PType, typId: PIdent;
   result = typeClass
   addDecl(c, s)
 
-proc liftParamType(c: PContext, procKind: TSymKind, genericParams: PNode,
+proc liftParamType*(c: PContext, procKind: TSymKind, genericParams: PNode,
                    paramType: PType, paramName: string,
                    info: TLineInfo, anon = false): PType =
   if paramType == nil: return # (e.g. proc return type)
@@ -1192,7 +1207,7 @@ proc semParamType(c: PContext, n: PNode, constraint: var PNode): PType =
   else:
     result = semTypeNode(c, n, nil)
 
-proc newProcType(c: PContext; info: TLineInfo; prev: PType = nil): PType =
+proc newProcType*(c: PContext; info: TLineInfo; prev: PType = nil): PType =
   result = newOrPrevType(tyProc, prev, c)
   result.callConv = lastOptionEntry(c).defaultCC
   result.n = newNodeI(nkFormalParams, info)
@@ -1206,7 +1221,7 @@ proc isMagic(sym: PSym): bool =
   let nPragmas = sym.ast[pragmasPos]
   return hasPragma(nPragmas, wMagic)
 
-proc semProcTypeNode(c: PContext, n, genericParams: PNode,
+proc semProcTypeNode*(c: PContext, n, genericParams: PNode,
                      prev: PType, kind: TSymKind; isType=false): PType =
   # for historical reasons (code grows) this is invoked for parameter
   # lists too and then 'isType' is false.
@@ -1550,7 +1565,7 @@ proc freshType(c: PContext; res, prev: PType): PType {.inline.} =
   else:
     result = res
 
-template modifierTypeKindOfNode(n: PNode): TTypeKind =
+template modifierTypeKindOfNode*(n: PNode): TTypeKind =
   case n.kind
   of nkVarTy: tyVar
   of nkRefTy: tyRef
@@ -1617,7 +1632,7 @@ proc semTypeClass(c: PContext, n: PNode, prev: PType): PType =
   result.n[3] = semConceptBody(c, n[3])
   closeScope(c)
 
-proc applyTypeSectionPragmas(c: PContext; pragmas, operand: PNode): PNode =
+proc applyTypeSectionPragmas*(c: PContext; pragmas, operand: PNode): PNode =
   for p in pragmas:
     let key = if p.kind in nkPragmaCallKinds and p.len >= 1: p[0] else: p
 
@@ -1688,7 +1703,7 @@ proc symFromExpectedTypeNode(c: PContext, n: PNode): PSym =
     localError(c.config, n.info, errTypeExpected)
     result = errorSym(c, n)
 
-proc semStaticType(c: PContext, childNode: PNode, prev: PType): PType =
+proc semStaticType*(c: PContext, childNode: PNode, prev: PType): PType =
   result = newOrPrevType(tyStatic, prev, c)
   var base = semTypeNode(c, childNode, nil).skipTypes({tyTypeDesc, tyAlias})
   result.rawAddSon(base)
@@ -2012,7 +2027,7 @@ proc setMagicIntegral(conf: ConfigRef; m: PSym, kind: TTypeKind, size: int) =
   setMagicType(conf, m, kind, size)
   incl m.typ.flags, tfCheckedForDestructor
 
-proc processMagicType(c: PContext, m: PSym) =
+proc processMagicType*(c: PContext, m: PSym) =
   case m.magic
   of mInt: setMagicIntegral(c.config, m, tyInt, c.config.target.intSize)
   of mInt8: setMagicIntegral(c.config, m, tyInt8, 1)
@@ -2097,7 +2112,7 @@ proc processMagicType(c: PContext, m: PSym) =
 proc semGenericConstraints(c: PContext, x: PType): PType =
   result = newTypeWithSons(c, tyGenericParam, @[x])
 
-proc semGenericParamList(c: PContext, n: PNode, father: PType = nil): PNode =
+proc semGenericParamList*(c: PContext, n: PNode, father: PType = nil): PNode =
 
   template addSym(result: PNode, s: PSym): untyped =
     if father != nil: addSonSkipIntLit(father, s.typ, c.idgen)

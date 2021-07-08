@@ -8,7 +8,13 @@
 #
 
 # This module implements the instantiation of generic procs.
-# included from sem.nim
+
+import
+  ast, strutils, astalgo, msgs, idents, renderer, types,
+  lookups, pragmas, semdata, semtypinst, sigmatch,
+  sempass2, lineinfos, modulegraphs, concepts
+
+import hlo, sem
 
 proc addObjFieldsToLocalScope(c: PContext; n: PNode) =
   template rec(n) = addObjFieldsToLocalScope(c, n)
@@ -55,9 +61,9 @@ proc pushProcCon*(c: PContext; owner: PSym) =
   rawHandleSelf(c, owner)
 
 const
-  errCannotInstantiateX = "cannot instantiate: '$1'"
+  errCannotInstantiateX* = "cannot instantiate: '$1'"
 
-iterator instantiateGenericParamList(c: PContext, n: PNode, pt: TIdTable): PSym =
+iterator instantiateGenericParamList*(c: PContext, n: PNode, pt: TIdTable): PSym =
   internalAssert c.config, n.kind == nkGenericParams
   for i, a in n.pairs:
     internalAssert c.config, a.kind == nkSym
@@ -85,6 +91,12 @@ iterator instantiateGenericParamList(c: PContext, n: PNode, pt: TIdTable): PSym 
       s.typ = t
       if t.kind == tyStatic: s.ast = t.n
       yield s
+
+# For semcall:
+proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable,
+                      info: TLineInfo): PSym {.nosinks.}
+
+from semcall import indexTypesMatch
 
 proc sameInstantiation(a, b: TInstantiation): bool =
   if a.concreteTypes.len == b.concreteTypes.len:
@@ -124,8 +136,6 @@ proc freshGenSyms(c: PContext; n: PNode, owner, orig: PSym, symMap: var TIdTable
   else:
     for i in 0..<n.safeLen: freshGenSyms(c, n[i], owner, orig, symMap)
 
-proc addParamOrResult(c: PContext, param: PSym, kind: TSymKind)
-
 proc instantiateBody(c: PContext, n, params: PNode, result, orig: PSym) =
   if n[bodyPos].kind != nkEmpty:
     let procParams = result.typ.n
@@ -150,7 +160,7 @@ proc instantiateBody(c: PContext, n, params: PNode, result, orig: PSym) =
     trackProc(c, result, result.ast[bodyPos])
     dec c.inGenericInst
 
-proc fixupInstantiatedSymbols(c: PContext, s: PSym) =
+proc fixupInstantiatedSymbols*(c: PContext, s: PSym) =
   for i in 0..<c.generics.len:
     if c.generics[i].genericSym.id == s.id:
       var oldPrc = c.generics[i].inst.sym
@@ -166,13 +176,13 @@ proc fixupInstantiatedSymbols(c: PContext, s: PSym) =
       popOwner(c)
       popProcCon(c)
 
-proc sideEffectsCheck(c: PContext, s: PSym) =
+proc sideEffectsCheck*(c: PContext, s: PSym) =
   when false:
     if {sfNoSideEffect, sfSideEffect} * s.flags ==
         {sfNoSideEffect, sfSideEffect}:
       localError(s.info, errXhasSideEffects, s.name.s)
 
-proc instGenericContainer(c: PContext, info: TLineInfo, header: PType,
+proc instGenericContainer*(c: PContext, info: TLineInfo, header: PType,
                           allowMetaTypes = false): PType =
   internalAssert c.config, header.kind == tyGenericInvocation
 
@@ -217,7 +227,7 @@ proc instGenericContainer(c: PContext, info: TLineInfo, header: PType,
   result = replaceTypeVarsT(cl, header)
   closeScope(c)
 
-proc referencesAnotherParam(n: PNode, p: PSym): bool =
+proc referencesAnotherParam*(n: PNode, p: PSym): bool =
   if n.kind == nkSym:
     return n.sym.kind == skParam and n.sym.owner == p
   else:
@@ -326,7 +336,7 @@ proc fillMixinScope(c: PContext) =
         addSym(c.currentScope, n.sym)
     p = p.next
 
-proc generateInstance(c: PContext, fn: PSym, pt: TIdTable,
+proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable,
                       info: TLineInfo): PSym {.nosinks.} =
   ## Generates a new instance of a generic procedure.
   ## The `pt` parameter is a type-unsafe mapping table used to link generic
