@@ -12,6 +12,7 @@
 import ast, astalgo, msgs, types, magicsys, semdata, renderer, options,
   lineinfos, modulegraphs
 
+import sem
 from concepts import makeTypeDesc
 
 const tfInstClearedFlags = {tfHasMeta, tfUnresolved}
@@ -153,7 +154,7 @@ proc reResolveCallsWithTypedescParams(cl: var TReplTypeVars, n: PNode): PNode =
       if isTypeParam(n[i]): needsFixing = true
     if needsFixing:
       n[0] = newSymNode(n[0].sym.owner)
-      return cl.c.semOverloadedCall(cl.c, n, n, {skProc, skFunc}, {})
+      return semOverloadedCall(cl.c, n, n, {skProc, skFunc}, {})
 
   for i in 0..<n.safeLen:
     n[i] = reResolveCallsWithTypedescParams(cl, n[i])
@@ -174,7 +175,7 @@ proc replaceObjBranches(cl: TReplTypeVars, n: PNode): PNode =
       of nkElifBranch:
         checkSonsLen(it, 2, cl.c.config)
         var cond = it[0]
-        var e = cl.c.semConstExpr(cl.c, cond)
+        var e = semConstExpr(cl.c, cond)
         if e.kind != nkIntLit:
           internalError(cl.c.config, e.info, "ReplaceTypeVarsN: when condition not a bool")
         if e.intVal != 0 and branch == nil: branch = it[1]
@@ -214,7 +215,7 @@ proc replaceTypeVarsN(cl: var TReplTypeVars, n: PNode; start=0): PNode =
       of nkElifBranch:
         checkSonsLen(it, 2, cl.c.config)
         var cond = prepareNode(cl, it[0])
-        var e = cl.c.semConstExpr(cl.c, cond)
+        var e = semConstExpr(cl.c, cond)
         if e.kind != nkIntLit:
           internalError(cl.c.config, e.info, "ReplaceTypeVarsN: when condition not a bool")
         if e.intVal != 0 and branch == nil: branch = it[1]
@@ -230,7 +231,7 @@ proc replaceTypeVarsN(cl: var TReplTypeVars, n: PNode; start=0): PNode =
     var n = prepareNode(cl, n)
     n = reResolveCallsWithTypedescParams(cl, n)
     result = if cl.allowMetaTypes: n
-             else: cl.c.semExpr(cl.c, n)
+             else: semExpr(cl.c, n)
     if not cl.allowMetaTypes:
       assert result.kind notin nkCallKinds
   else:
@@ -536,7 +537,7 @@ proc replaceTypeVarsTAux(cl: var TReplTypeVars, t: PType): PType =
     assert t.n.typ != t
     var n = prepareNode(cl, t.n)
     if n.kind != nkEmpty:
-      n = cl.c.semConstExpr(cl.c, n)
+      n = semConstExpr(cl.c, n)
     if n.typ.kind == tyTypeDesc:
       # XXX: sometimes, chained typedescs enter here.
       # It may be worth investigating why this is happening,
@@ -615,7 +616,7 @@ proc replaceTypeVarsTAux(cl: var TReplTypeVars, t: PType): PType =
 
       of tyObject, tyTuple:
         propagateFieldFlags(result, result.n)
-        if result.kind == tyObject and cl.c.computeRequiresInit(cl.c, result):
+        if result.kind == tyObject and computeRequiresInit(cl.c, result):
           result.flags.incl tfRequiresInit
 
       of tyProc:

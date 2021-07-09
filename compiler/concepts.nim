@@ -14,6 +14,7 @@
 import ast, astalgo, semdata, lookups, lineinfos, idents, msgs, renderer,
   types, intsets
 
+import sem
 from magicsys import addSonSkipIntLit
 
 const
@@ -53,7 +54,7 @@ proc semConceptDecl(c: PContext; n: PNode): PNode =
     for i in 0..<n.len:
       result[i] = semConceptDecl(c, n[i])
   of nkProcDef..nkIteratorDef, nkFuncDef:
-    result = c.semExpr(c, n, {efWantStmt})
+    result = semExpr(c, n, {efWantStmt})
   of nkTypeClassTy:
     result = shallowCopy(n)
     for i in 0..<n.len-1:

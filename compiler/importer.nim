@@ -11,8 +11,8 @@
 
 import
   intsets, ast, astalgo, msgs, options, idents, lookups,
-  semdata, modulepaths, sigmatch, lineinfos, sets,
-  modulegraphs, wordrecg, tables
+  semdata, modulepaths, lineinfos, sets, modulegraphs,
+  wordrecg, tables, suggest
 from strutils import `%`
 
 proc readExceptSet*(c: PContext, n: PNode): IntSet =

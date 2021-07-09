@@ -13,6 +13,8 @@
 import
   ast, types, semdata, sigmatch, idents, aliases, parampatterns, trees
 
+import suggest
+
 type
   TPatternContext = object
     owner: PSym

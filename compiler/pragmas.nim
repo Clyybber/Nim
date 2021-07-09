@@ -14,6 +14,7 @@ import
   wordrecg, ropes, options, strutils, extccomp, math, magicsys, trees,
   types, lookups, lineinfos, pathutils, linter
 
+import sem
 from ic / ic import addCompilerProc
 
 const
@@ -115,7 +116,7 @@ proc pragmaProposition(c: PContext, n: PNode) =
   if n.kind notin nkPragmaCallKinds or n.len != 2:
     localError(c.config, n.info, "proposition expected")
   else:
-    n[1] = c.semExpr(c, n[1])
+    n[1] = semExpr(c, n[1])
 
 proc pragmaEnsures(c: PContext, n: PNode) =
   if n.kind notin nkPragmaCallKinds or n.len != 2:
@@ -128,7 +129,7 @@ proc pragmaEnsures(c: PContext, n: PNode) =
       s.typ = o.typ.sons[0]
       incl(s.flags, sfUsed)
       addDecl(c, s)
-    n[1] = c.semExpr(c, n[1])
+    n[1] = semExpr(c, n[1])
     closeScope(c)
 
 proc pragmaAsm*(c: PContext, n: PNode): char =
@@ -205,7 +206,7 @@ proc getStrLitNode(c: PContext, n: PNode): PNode =
     # error correction:
     result = newEmptyStrNode(c, n)
   else:
-    n[1] = c.semConstExpr(c, n[1])
+    n[1] = semConstExpr(c, n[1])
     case n[1].kind
     of nkStrLit, nkRStrLit, nkTripleStrLit: result = n[1]
     else:
@@ -220,7 +221,7 @@ proc expectIntLit(c: PContext, n: PNode): int =
   if n.kind notin nkPragmaCallKinds or n.len != 2:
     localError(c.config, n.info, errIntLiteralExpected)
   else:
-    n[1] = c.semConstExpr(c, n[1])
+    n[1] = semConstExpr(c, n[1])
     case n[1].kind
     of nkIntLit..nkInt64Lit: result = int(n[1].intVal)
     else: localError(c.config, n.info, errIntLiteralExpected)
@@ -254,7 +255,7 @@ proc wordToCallConv(sw: TSpecialWord): TCallingConvention =
 
 proc isTurnedOn(c: PContext, n: PNode): bool =
   if n.kind in nkPragmaCallKinds and n.len == 2:
-    let x = c.semConstBoolExpr(c, n[1])
+    let x = semConstBoolExpr(c, n[1])
     n[1] = x
     if x.kind == nkIntLit: return x.intVal != 0
   localError(c.config, n.info, "'on' or 'off' expected")
@@ -305,7 +306,7 @@ proc expectDynlibNode(c: PContext, n: PNode): PNode =
   else:
     # For the OpenGL wrapper we support:
     # {.dynlib: myGetProcAddr(...).}
-    result = c.semExpr(c, n[1])
+    result = semExpr(c, n[1])
     if result.kind == nkSym and result.sym.kind == skConst:
       result = result.sym.ast # look it up
     if result.typ == nil or result.typ.kind notin {tyPointer, tyString, tyProc}:
@@ -337,7 +338,7 @@ proc processNote(c: PContext, n: PNode) =
     let x = findStr(enumVals.a, enumVals.b, n[0][1].ident.s, errUnknown)
     if x !=  errUnknown:
       nk = TNoteKind(x)
-      let x = c.semConstBoolExpr(c, n[1])
+      let x = semConstBoolExpr(c, n[1])
       n[1] = x
       if x.kind == nkIntLit and x.intVal != 0: incl(notes, nk)
       else: excl(notes, nk)
@@ -389,7 +390,7 @@ proc processExperimental(c: PContext; n: PNode) =
   if n.kind notin nkPragmaCallKinds or n.len != 2:
     c.features.incl oldExperimentalFeatures
   else:
-    n[1] = c.semConstExpr(c, n[1])
+    n[1] = semConstExpr(c, n[1])
     case n[1].kind
     of nkStrLit, nkRStrLit, nkTripleStrLit:
       try:
@@ -502,7 +503,7 @@ proc processCompile(c: PContext, n: PNode) =
     recordPragma(c, it, "compile", src.string, dest.string, customArgs)
 
   proc getStrLit(c: PContext, n: PNode; i: int): string =
-    n[i] = c.semConstExpr(c, n[i])
+    n[i] = semConstExpr(c, n[i])
     case n[i].kind
     of nkStrLit, nkRStrLit, nkTripleStrLit:
       shallowCopy(result, n[i].strVal)
@@ -588,10 +589,10 @@ proc pragmaEmit(c: PContext, n: PNode) =
     if n1.kind == nkBracket:
       var b = newNodeI(nkBracket, n1.info, n1.len)
       for i in 0..<n1.len:
-        b[i] = c.semExpr(c, n1[i])
+        b[i] = semExpr(c, n1[i])
       n[1] = b
     else:
-      n[1] = c.semConstExpr(c, n1)
+      n[1] = semConstExpr(c, n1)
       case n[1].kind
       of nkStrLit, nkRStrLit, nkTripleStrLit:
         n[1] = semAsmOrEmit(c, n, '`')
@@ -613,7 +614,7 @@ proc pragmaUnroll(c: PContext, n: PNode) =
 
 proc pragmaLine(c: PContext, n: PNode) =
   if n.kind in nkPragmaCallKinds and n.len == 2:
-    n[1] = c.semConstExpr(c, n[1])
+    n[1] = semConstExpr(c, n[1])
     let a = n[1]
     if a.kind in {nkPar, nkTupleConstr}:
       # unpack the tuple
@@ -646,10 +647,10 @@ proc processPragma(c: PContext, n: PNode, i: int) =
 
 proc pragmaRaisesOrTags(c: PContext, n: PNode) =
   proc processExc(c: PContext, x: PNode) =
-    if c.hasUnresolvedArgs(c, x):
+    if hasUnresolvedArgs(c, x):
       x.typ = makeTypeFromExpr(c, x)
     else:
-      var t = skipTypes(c.semTypeNode(c, x, nil), skipPtrs)
+      var t = skipTypes(semTypeNode(c, x, nil), skipPtrs)
       if t.kind != tyObject and not t.isMetaType:
         localError(c.config, x.info, errGenerated, "invalid type for raises/tags list")
       x.typ = t
@@ -672,7 +673,7 @@ proc pragmaLockStmt(c: PContext; it: PNode) =
       localError(c.config, n.info, errGenerated, "locks pragma takes a list of expressions")
     else:
       for i in 0..<n.len:
-        n[i] = c.semExpr(c, n[i])
+        n[i] = semExpr(c, n[i])
 
 proc pragmaLocks(c: PContext, it: PNode): TLockLevel =
   if it.kind notin nkPragmaCallKinds or it.len != 2:
@@ -765,7 +766,7 @@ proc semCustomPragma(c: PContext, n: PNode): PNode =
     invalidPragma(c, n)
     return n
 
-  let r = c.semOverloadedCall(c, callNode, n, {skTemplate}, {efNoUndeclared})
+  let r = semOverloadedCall(c, callNode, n, {skTemplate}, {efNoUndeclared})
   if r.isNil or sfCustomPragma notin r[0].sym.flags:
     invalidPragma(c, n)
     return n
@@ -1187,7 +1188,7 @@ proc singlePragma(c: PContext, sym: PSym, n: PNode, i: var int,
         if it.kind notin nkPragmaCallKinds or it.len != 2:
           localError(c.config, it.info, "expression expected")
         else:
-          it[1] = c.semExpr(c, it[1])
+          it[1] = semExpr(c, it[1])
       of wExperimental:
         if not isTopLevel(c):
           localError(c.config, n.info, "'experimental' pragma only valid as toplevel statement or in a 'push' environment")

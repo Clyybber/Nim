@@ -118,21 +118,6 @@ type
     symMapping*: TIdTable      # every gensym'ed symbol needs to be mapped
                                # to some new symbol in a generic instantiation
     libs*: seq[PLib]           # all libs used by this module
-    semConstExpr*: proc (c: PContext, n: PNode): PNode {.nimcall.} # for the pragmas
-    semExpr*: proc (c: PContext, n: PNode, flags: TExprFlags = {}): PNode {.nimcall.}
-    semTryExpr*: proc (c: PContext, n: PNode, flags: TExprFlags = {}): PNode {.nimcall.}
-    semTryConstExpr*: proc (c: PContext, n: PNode): PNode {.nimcall.}
-    computeRequiresInit*: proc (c: PContext, t: PType): bool {.nimcall.}
-    hasUnresolvedArgs*: proc (c: PContext, n: PNode): bool
-
-    semOperand*: proc (c: PContext, n: PNode, flags: TExprFlags = {}): PNode {.nimcall.}
-    semConstBoolExpr*: proc (c: PContext, n: PNode): PNode {.nimcall.} # XXX bite the bullet
-    semOverloadedCall*: proc (c: PContext, n, nOrig: PNode,
-                              filter: TSymKinds, flags: TExprFlags): PNode {.nimcall.}
-    semTypeNode*: proc(c: PContext, n: PNode, prev: PType): PType {.nimcall.}
-    semInferredLambda*: proc(c: PContext, pt: TIdTable, n: PNode): PNode
-    semGenerateInstance*: proc (c: PContext, fn: PSym, pt: TIdTable,
-                                info: TLineInfo): PSym
     includedFiles*: IntSet    # used to detect recursive include files
     pureEnumFields*: TStrTable   # pure enum fields that can be used unambiguously
     userPragmas*: TStrTable

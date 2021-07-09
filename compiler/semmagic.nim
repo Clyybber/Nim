@@ -74,7 +74,7 @@ proc semIsPartOf(c: PContext, n: PNode, flags: TExprFlags): PNode =
   result = newIntNodeT(toInt128(ord(r)), n, c.idgen, c.graph)
 
 proc expectIntLit(c: PContext, n: PNode): int =
-  let x = c.semConstExpr(c, n)
+  let x = semConstExpr(c, n)
   case x.kind
   of nkIntLit..nkInt64Lit: result = int(x.intVal)
   else: localError(c.config, n.info, errIntLiteralExpected)

@@ -11,10 +11,21 @@
 
 import
   ast, strutils, astalgo, msgs, idents, renderer, types,
-  lookups, pragmas, semdata, semtypinst, sigmatch,
-  sempass2, lineinfos, modulegraphs, concepts
+  lookups, pragmas, semdata, semtypinst, sempass2,
+  lineinfos, modulegraphs, concepts
+
+const
+  errCannotInstantiateX* = "cannot instantiate: '$1'"
+
+proc pushProcCon*(c: PContext; owner: PSym)
+proc fixupInstantiatedSymbols*(c: PContext, s: PSym)
+proc instGenericContainer*(c: PContext, info: TLineInfo, header: PType,
+                          allowMetaTypes = false): PType
+proc referencesAnotherParam*(n: PNode, p: PSym): bool
 
 import hlo, sem
+
+import suggest
 
 proc addObjFieldsToLocalScope(c: PContext; n: PNode) =
   template rec(n) = addObjFieldsToLocalScope(c, n)
@@ -60,9 +71,6 @@ proc pushProcCon*(c: PContext; owner: PSym) =
   rawPushProcCon(c, owner)
   rawHandleSelf(c, owner)
 
-const
-  errCannotInstantiateX* = "cannot instantiate: '$1'"
-
 iterator instantiateGenericParamList*(c: PContext, n: PNode, pt: TIdTable): PSym =
   internalAssert c.config, n.kind == nkGenericParams
   for i, a in n.pairs:
@@ -93,10 +101,10 @@ iterator instantiateGenericParamList*(c: PContext, n: PNode, pt: TIdTable): PSym
       yield s
 
 # For semcall:
-proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable,
-                      info: TLineInfo): PSym {.nosinks.}
+proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable, info: TLineInfo): PSym
 
 from semcall import indexTypesMatch
+from semstmts import finishMethod, maybeAddResult
 
 proc sameInstantiation(a, b: TInstantiation): bool =
   if a.concreteTypes.len == b.concreteTypes.len:
@@ -175,12 +183,6 @@ proc fixupInstantiatedSymbols*(c: PContext, s: PSym) =
       popInfoContext(c.config)
       popOwner(c)
       popProcCon(c)
-
-proc sideEffectsCheck*(c: PContext, s: PSym) =
-  when false:
-    if {sfNoSideEffect, sfSideEffect} * s.flags ==
-        {sfNoSideEffect, sfSideEffect}:
-      localError(s.info, errXhasSideEffects, s.name.s)
 
 proc instGenericContainer*(c: PContext, info: TLineInfo, header: PType,
                           allowMetaTypes = false): PType =
@@ -336,8 +338,7 @@ proc fillMixinScope(c: PContext) =
         addSym(c.currentScope, n.sym)
     p = p.next
 
-proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable,
-                      info: TLineInfo): PSym {.nosinks.} =
+proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable, info: TLineInfo): PSym =
   ## Generates a new instance of a generic procedure.
   ## The `pt` parameter is a type-unsafe mapping table used to link generic
   ## parameters to their concrete types within the generic instance.
@@ -407,7 +408,6 @@ proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable,
       n[bodyPos] = copyTree(getBody(c.graph, fn))
     if c.inGenericContext == 0:
       instantiateBody(c, n, fn.typ.n, result, fn)
-    sideEffectsCheck(c, result)
     if result.magic notin {mSlice, mTypeOf}:
       # 'toOpenArray' is special and it is allowed to return 'openArray':
       paramsTypeCheck(c, result.typ)

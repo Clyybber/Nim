@@ -14,8 +14,40 @@ import
   magicsys, lookups, semdata, semtypinst, sigmatch,
   lineinfos, strtabs, modulegraphs, astmsgs
 
-import sem
+const
+  errTypeMismatch = "type mismatch: got <"
+  errButExpected = "but expected one of:"
+  errUndeclaredField* = "undeclared field: '$1'"
+  errUndeclaredRoutine = "attempting to call undeclared routine: '$1'"
+  errBadRoutine = "attempting to call routine: '$1'$2"
+  errAmbiguousCallXYZ* = "ambiguous call; both $1 and $2 match for: $3"
+
+proc renderNotLValue*(n: PNode): string
+proc notFoundError*(c: PContext, n: PNode, errors: CandidateErrors)
+proc bracketNotFoundError*(c: PContext; n: PNode)
+proc resolveOverloads*(c: PContext, n, orig: PNode,
+                      filter: TSymKinds, flags: TExprFlags,
+                      errors: var CandidateErrors,
+                      errorsEnabled: bool): TCandidate
+proc instGenericConvertersArg*(c: PContext, a: PNode, x: TCandidate)
+proc instGenericConvertersSons*(c: PContext, n: PNode, x: TCandidate)
+proc indexTypesMatch*(c: PContext, f, a: PType, arg: PNode): PNode
+proc inferWithMetatype*(c: PContext, formal: PType,
+                       arg: PNode, coerceDistincts = false): PNode
+proc getCallLineInfo*(n: PNode): TLineInfo
+proc semResolvedCall*(c: PContext, x: TCandidate,
+                     n: PNode, flags: TExprFlags): PNode
+proc canDeref*(n: PNode): bool {.inline.}
+proc tryDeref*(n: PNode): PNode
+proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
+                       filter: TSymKinds, flags: TExprFlags): PNode {.nosinks.}
+proc explicitGenericInstantiation*(c: PContext, n: PNode, s: PSym): PNode
+proc searchForBorrowProc*(c: PContext, startScope: PScope, fn: PSym): PSym
+
+import sem except generateInstance
 import seminst
+import suggest
+from semstmts import semProcAux
 
 from algorithm import sort
 
@@ -41,10 +73,6 @@ proc sameMethodDispatcher(a, b: PSym): bool =
       # be disambiguated by the programmer; this way the right generic is
       # instantiated.
 
-# FOR NOW IMPORTED FROM SEM
-#from semstmts import determineType
-#proc determineType(c: PContext, s: PSym)
-
 proc initCandidateSymbols(c: PContext, headSymbol: PNode,
                           initialBinding: PNode,
                           filter: TSymKinds,
@@ -63,6 +91,12 @@ proc initCandidateSymbols(c: PContext, headSymbol: PNode,
     initCandidate(c, alt, result[0].s, initialBinding,
                   result[0].scope, diagnostics)
     best.state = csNoMatch
+
+proc determineType(c: PContext, s: PSym) =
+  if s.typ != nil: return
+  #if s.magic != mNone: return
+  #if s.ast.isNil: return
+  discard semProcAux(c, s.ast, s.kind, {})
 
 proc pickBestCandidate(c: PContext, headSymbol: PNode,
                        n, orig: PNode,
@@ -278,14 +312,6 @@ proc presentFailedCandidates(c: PContext, n: PNode, errors: CandidateErrors):
     candidates.add("maybe misplaced space between " & renderTree(n[0]) & " and '(' \n")
 
   result = (prefer, candidates)
-
-const
-  errTypeMismatch = "type mismatch: got <"
-  errButExpected = "but expected one of:"
-  errUndeclaredField* = "undeclared field: '$1'"
-  errUndeclaredRoutine = "attempting to call undeclared routine: '$1'"
-  errBadRoutine = "attempting to call routine: '$1'$2"
-  errAmbiguousCallXYZ* = "ambiguous call; both $1 and $2 match for: $3"
 
 proc notFoundError*(c: PContext, n: PNode, errors: CandidateErrors) =
   # Gives a detailed error message; this is separated from semOverloadedCall,
@@ -644,7 +670,7 @@ proc explicitGenericSym(c: PContext, n: PNode, s: PSym): PNode =
     # try transforming the argument into a static one before feeding it into
     # typeRel
     if formal.kind == tyStatic and arg.kind != tyStatic:
-      let evaluated = c.semTryConstExpr(c, n[i])
+      let evaluated = tryConstExpr(c, n[i])
       if evaluated != nil:
         arg = newTypeS(tyStatic, c)
         arg.sons = @[evaluated.typ]

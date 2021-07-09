@@ -17,16 +17,6 @@ import
   lowerings, lineinfos, strtabs, int128,
   typeallowed, modulegraphs
 
-import sem
-
-import semtypes
-from semcall import
-  inferWithMetatype, errAmbiguousCallXYZ, resolveOverloads, semResolvedCall, searchForBorrowProc, semOverloadedCall
-from seminst import pushProcCon, fixupInstantiatedSymbols, sideEffectsCheck
-import hlo
-from semtempl import semPattern, errImplOfXNotAllowed
-from semgnrc import semGenericStmt
-
 const
   errNoSymbolToBorrowFromFound = "no symbol to borrow from found"
   errDiscardValueX = "value of type '$1' has to be used (or discarded)"
@@ -53,6 +43,57 @@ const
   errRecursiveDependencyX = "recursive dependency: '$1'"
   errRecursiveDependencyIteratorX* = "recursion is not supported in iterators: '$1'"
   errPragmaOnlyInHeaderOfProcX = "pragmas are only allowed in the header of a proc; redefinition of $1"
+
+proc semDiscard*(c: PContext, n: PNode): PNode
+proc semBreakOrContinue*(c: PContext, n: PNode): PNode
+proc semAsm*(c: PContext, n: PNode): PNode
+proc semWhile*(c: PContext, n: PNode; flags: TExprFlags): PNode
+proc semProc*(c: PContext, n: PNode): PNode
+proc implicitlyDiscardable*(n: PNode): bool
+proc fixNilType*(c: PContext; n: PNode)
+proc discardCheck*(c: PContext, result: PNode, flags: TExprFlags)
+proc semIf*(c: PContext, n: PNode; flags: TExprFlags): PNode
+proc semTry*(c: PContext, n: PNode; flags: TExprFlags): PNode
+proc semUsing*(c: PContext; n: PNode): PNode
+proc hasUnresolvedParams*(n: PNode; flags: TExprFlags): bool
+proc makeDeref*(n: PNode): PNode
+proc semVarOrLet*(c: PContext, n: PNode, symkind: TSymKind): PNode
+proc semConst*(c: PContext, n: PNode): PNode
+proc semFor*(c: PContext, n: PNode; flags: TExprFlags): PNode
+proc semCase*(c: PContext, n: PNode; flags: TExprFlags): PNode
+proc semRaise*(c: PContext, n: PNode): PNode
+proc semAllTypeSections*(c: PContext; n: PNode): PNode
+proc semTypeSection*(c: PContext, n: PNode): PNode
+proc semParamList*(c: PContext, n, genericParams: PNode, s: PSym)
+proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode
+proc activate*(c: PContext, n: PNode)
+proc maybeAddResult*(c: PContext, s: PSym, n: PNode)
+proc whereToBindTypeHook*(c: PContext; t: PType): PType
+proc bindTypeHook*(c: PContext; s: PSym; n: PNode; op: TTypeAttachedOp)
+proc finishMethod*(c: PContext, s: PSym)
+proc semProcAux*(c: PContext, n: PNode, kind: TSymKind,
+                validPragmas: TSpecialWords, flags: TExprFlags = {}): PNode
+proc semIterator*(c: PContext, n: PNode): PNode
+proc semFunc*(c: PContext, n: PNode): PNode
+proc semMethod*(c: PContext, n: PNode): PNode
+proc semConverterDef*(c: PContext, n: PNode): PNode
+proc semMacroDef*(c: PContext, n: PNode): PNode
+proc evalInclude*(c: PContext, n: PNode): PNode
+proc semPragmaBlock*(c: PContext, n: PNode): PNode
+proc semStaticStmt*(c: PContext, n: PNode): PNode
+proc semStmtList*(c: PContext, n: PNode, flags: TExprFlags): PNode
+proc semStmt*(c: PContext, n: PNode; flags: TExprFlags): PNode
+
+from semcall import
+  inferWithMetatype, errAmbiguousCallXYZ, resolveOverloads, semResolvedCall, searchForBorrowProc
+import sem except semTypeNode
+import semtypes
+from seminst import pushProcCon, fixupInstantiatedSymbols
+import hlo
+from semtempl import semPattern, setGenericParamsMisc, errImplOfXNotAllowed
+from semgnrc import semGenericStmt
+from semexprs import changeType
+import suggest
 
 proc semDiscard*(c: PContext, n: PNode): PNode =
   result = n
@@ -112,8 +153,6 @@ proc semWhile*(c: PContext, n: PNode; flags: TExprFlags): PNode =
     result.typ = c.enforceVoidContext
   elif efInTypeof in flags:
     result.typ = n[1].typ
-
-proc semProc*(c: PContext, n: PNode): PNode
 
 proc semExprBranch(c: PContext, n: PNode; flags: TExprFlags = {}): PNode =
   result = semExpr(c, n, flags)
@@ -506,6 +545,15 @@ proc semLowerLetVarCustomPragma(c: PContext, a: PNode, n: PNode): PNode =
     let ret = newNodeI(nkStmtList, a.info)
     ret.add result
     result = semExprNoType(c, ret)
+
+proc fitNodeForLocalVar(c: PContext, formal: PType, arg: PNode; info: TLineInfo): PNode =
+  let a = fitNode(c, formal, arg, info)
+  if formal.kind in {tyVar, tyLent}:
+    #classifyViewType(formal) != noView:
+    result = newNodeIT(nkHiddenAddr, a.info, formal)
+    result.add a
+  else:
+   result = a
 
 proc semVarOrLet*(c: PContext, n: PNode, symkind: TSymKind): PNode =
   if n.len == 1:
@@ -1577,7 +1625,7 @@ proc semProcAnnotation(c: PContext, prc: PNode;
 
     return
 
-proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode {.nosinks.} =
+proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode =
   ## used for resolving 'auto' in lambdas based on their callsite
   var n = n
   let original = n[namePos].sym
@@ -1614,7 +1662,7 @@ proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode {.nosinks.} 
     result.typ = makeVarType(c, result.typ, tyOwned)
   # alternative variant (not quite working):
   # var prc = arg[0].sym
-  # let inferred = c.semGenerateInstance(c, prc, m.bindings, arg.info)
+  # let inferred = generateInstance(c, prc, m.bindings, arg.info)
   # result = inferred.ast
   # result.kind = arg.kind
 
@@ -2057,7 +2105,6 @@ proc semProcAux*(c: PContext, n: PNode, kind: TSymKind,
       incl(s.flags, sfForward)
       incl(s.flags, sfWasForwarded)
     elif sfBorrow in s.flags: semBorrow(c, n, s)
-  sideEffectsCheck(c, s)
   closeScope(c)           # close scope for parameters
   # c.currentScope = oldScope
   popOwner(c)
@@ -2070,12 +2117,6 @@ proc semProcAux*(c: PContext, n: PNode, kind: TSymKind,
       result.typ = makeVarType(c, result.typ, tyOwned)
   elif isTopLevel(c) and s.kind != skIterator and s.typ.callConv == ccClosure:
     localError(c.config, s.info, "'.closure' calling convention for top level routines is invalid")
-
-proc determineType*(c: PContext, s: PSym) =
-  if s.typ != nil: return
-  #if s.magic != mNone: return
-  #if s.ast.isNil: return
-  discard semProcAux(c, s.ast, s.kind, {})
 
 proc semIterator*(c: PContext, n: PNode): PNode =
   # gensym'ed iterator?

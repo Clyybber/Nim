@@ -17,11 +17,12 @@
 
 import
   ast, options, astalgo, ropes, msgs, idents, renderer,
-  semfold, lookups, semdata, sigmatch, intsets, linter,
+  semfold, lookups, semdata, intsets, linter,
   lineinfos, strtabs, int128, modulegraphs
 
 import sem
 import semtempl
+import suggest
 
 proc getIdentNode(c: PContext; n: PNode): PNode =
   case n.kind

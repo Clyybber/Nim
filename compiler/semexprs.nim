@@ -25,12 +25,13 @@ when defined(nimfix):
 when not defined(leanCompiler):
   import spawn
 
-import sem except semStmt
+import sem except semStmt, semOverloadedCall, semTypeNode, generateInstance
 import semtempl
 import semtypes
 import semcall
 import semstmts
 import seminst
+import suggest
 
 proc semTypeOf(c: PContext; n: PNode): PNode
 proc semStaticExpr(c: PContext, n: PNode): PNode
@@ -482,6 +483,34 @@ proc isOpImpl(c: PContext, n: PNode, flags: TExprFlags): PNode =
   result = newIntNode(nkIntLit, ord(res))
   result.typ = n.typ
 
+proc tryConstExpr*(c: PContext, n: PNode): PNode =
+  var e = semExprWithType(c, n)
+  if e == nil: return
+
+  result = getConstExpr(c.module, e, c.idgen, c.graph)
+  if result != nil: return
+
+  let oldErrorCount = c.config.errorCounter
+  let oldErrorMax = c.config.errorMax
+  let oldErrorOutputs = c.config.m.errorOutputs
+
+  c.config.m.errorOutputs = {}
+  c.config.errorMax = high(int) # `setErrorMaxHighMaybe` not appropriate here
+
+  try:
+    result = evalConstExpr(c.module, c.idgen, c.graph, e)
+    if result == nil or result.kind == nkEmpty:
+      result = nil
+    else:
+      result = fixupTypeAfterEval(c, result, e)
+
+  except ERecoverableError:
+    result = nil
+
+  c.config.errorCounter = oldErrorCount
+  c.config.errorMax = oldErrorMax
+  c.config.m.errorOutputs = oldErrorOutputs
+
 proc semIs(c: PContext, n: PNode, flags: TExprFlags): PNode =
   if n.len != 3:
     localError(c.config, n.info, "'is' operator takes 2 arguments")
@@ -662,6 +691,10 @@ proc semArrayConstr(c: PContext, n: PNode, flags: TExprFlags): PNode =
   result.typ[0] = makeRangeType(c, toInt64(firstIndex), toInt64(lastIndex), n.info,
                                      indexType)
 
+proc isArrayConstr(n: PNode): bool {.inline.} =
+  result = n.kind == nkBracket and
+    n.typ.skipTypes(abstractInst).kind == tyArray
+
 proc fixAbstractType(c: PContext, n: PNode) =
   for i in 1..<n.len:
     let it = n[i]
@@ -677,38 +710,6 @@ proc fixAbstractType(c: PContext, n: PNode) =
 
 proc isAssignable(c: PContext, n: PNode; isUnsafeAddr=false): TAssignableResult =
   result = parampatterns.isAssignable(c.p.owner, n, isUnsafeAddr)
-
-proc isUnresolvedSym(s: PSym): bool =
-  result = s.kind == skGenericParam
-  if not result and s.typ != nil:
-    result = tfInferrableStatic in s.typ.flags or
-        (s.kind == skParam and s.typ.isMetaType) or
-        (s.kind == skType and
-        s.typ.flags * {tfGenericTypeParam, tfImplicitTypeParam} != {})
-
-proc hasUnresolvedArgs*(c: PContext, n: PNode): bool =
-  # Checks whether an expression depends on generic parameters that
-  # don't have bound values yet. E.g. this could happen in situations
-  # such as:
-  #  type Slot[T] = array[T.size, byte]
-  #  proc foo[T](x: default(T))
-  #
-  # Both static parameter and type parameters can be unresolved.
-  case n.kind
-  of nkSym:
-    return isUnresolvedSym(n.sym)
-  of nkIdent, nkAccQuoted:
-    let ident = considerQuotedIdent(c, n)
-    var amb = false
-    let sym = searchInScopes(c, ident, amb)
-    if sym != nil:
-      return isUnresolvedSym(sym)
-    else:
-      return false
-  else:
-    for i in 0..<n.safeLen:
-      if hasUnresolvedArgs(c, n[i]): return true
-    return false
 
 proc newHiddenAddrTaken(c: PContext, n: PNode): PNode =
   if n.kind == nkHiddenDeref and not (c.config.backend == backendCpp or
@@ -2237,7 +2238,7 @@ proc instantiateCreateFlowVarCall(c: PContext; t: PType;
   var bindings: TIdTable
   initIdTable(bindings)
   bindings.idTablePut(sym.ast[genericParamsPos][0].typ, t)
-  result = c.semGenerateInstance(c, sym, bindings, info)
+  result = generateInstance(c, sym, bindings, info)
   # since it's an instantiation, we unmark it as a compilerproc. Otherwise
   # codegen would fail:
   if sfCompilerProc in result.flags:
@@ -2563,6 +2564,20 @@ proc semTuplePositionsConstr(c: PContext, n: PNode, flags: TExprFlags): PNode =
     n[i] = semExprWithType(c, n[i], flags*{efAllowDestructor})
     addSonSkipIntLit(typ, n[i].typ, c.idgen)
   result.typ = typ
+
+proc semExprFlagDispatched(c: PContext, n: PNode, flags: TExprFlags): PNode =
+  if efNeedStatic in flags:
+    if efPreferNilResult in flags:
+      return tryConstExpr(c, n)
+    else:
+      return semConstExpr(c, n)
+  else:
+    result = semExprWithType(c, n, flags)
+    if efPreferStatic in flags:
+      var evaluated = getConstExpr(c.module, result, c.idgen, c.graph)
+      if evaluated != nil: return evaluated
+      evaluated = evalAtCompileTime(c, result)
+      if evaluated != nil: return evaluated
 
 include semobjconstr
 

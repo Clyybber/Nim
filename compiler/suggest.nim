@@ -30,13 +30,36 @@
 ## - In any case, sorting also considers scoping information. Local variables
 ##   get high priority.
 
-# included from sigmatch.nim
-
-import algorithm, sets, prefixmatches, lineinfos, parseutils, linter, tables
+import
+  ast, astalgo, semdata, types, msgs, renderer, lookups,
+  idents, lexer, options, strutils, trees, linter,
+  lineinfos, modulegraphs, algorithm, sets,
+  prefixmatches, parseutils, tables
 from wordrecg import wDeprecated, wError, wAddr, wYield
+
+proc markUsed*(c: PContext; info: TLineInfo; s: PSym)
+import sigmatch
+import sem
 
 when defined(nimsuggest):
   import passes, tables, pathutils # importer
+
+template semIdeForTemplateOrGenericCheck*(conf, n, requiresCheck) =
+  # we check quickly if the node is where the cursor is
+  when defined(nimsuggest):
+    if n.info.fileIndex == conf.m.trackPos.fileIndex and n.info.line == conf.m.trackPos.line:
+      requiresCheck = true
+
+template semIdeForTemplateOrGeneric*(c: PContext; n: PNode; requiresCheck: bool) =
+  # use only for idetools support; this is pretty slow so generics and
+  # templates perform some quick check whether the cursor is actually in
+  # the generic or template.
+  when defined(nimsuggest):
+    if c.config.cmd == cmdIdeTools and requiresCheck:
+      #if optIdeDebug in gGlobalOptions:
+      #  echo "passing to
+      #  : ", renderTree(n)
+      discard safeSemExpr(c, n)
 
 const
   sep = '\t'
@@ -564,7 +587,7 @@ proc userError(conf: ConfigRef; info: TLineInfo; s: PSym) =
         return
   bail("")
 
-proc markOwnerModuleAsUsed(c: PContext; s: PSym) =
+proc markOwnerModuleAsUsed*(c: PContext; s: PSym) =
   var module = s
   while module != nil and module.kind != skModule:
     module = module.owner
@@ -579,7 +602,7 @@ proc markOwnerModuleAsUsed(c: PContext; s: PSym) =
       else:
         inc i
 
-proc markUsed(c: PContext; info: TLineInfo; s: PSym) =
+proc markUsed*(c: PContext; info: TLineInfo; s: PSym) =
   let conf = c.config
   incl(s.flags, sfUsed)
   if s.kind == skEnumField and s.owner != nil:
@@ -603,7 +626,7 @@ proc markUsed(c: PContext; info: TLineInfo; s: PSym) =
 proc safeSemExpr*(c: PContext, n: PNode): PNode =
   # use only for idetools support!
   try:
-    result = c.semExpr(c, n)
+    result = semExpr(c, n)
   except ERecoverableError:
     result = c.graph.emptyNode
 

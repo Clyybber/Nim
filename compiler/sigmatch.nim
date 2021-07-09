@@ -12,8 +12,10 @@
 
 import
   intsets, ast, astalgo, semdata, types, msgs, renderer, lookups, semtypinst,
-  magicsys, idents, lexer, options, parampatterns, strutils, trees,
-  linter, lineinfos, lowerings, modulegraphs, concepts
+  magicsys, idents, options, parampatterns, strutils, trees,
+  lineinfos, lowerings, modulegraphs, concepts
+
+import sem
 
 type
   MismatchKind* = enum
@@ -89,9 +91,6 @@ type
 
 const
   isNilConversion = isConvertible # maybe 'isIntConv' fits better?
-
-proc markUsed*(c: PContext; info: TLineInfo, s: PSym)
-proc markOwnerModuleAsUsed*(c: PContext; s: PSym)
 
 template hasFauxMatch*(c: TCandidate): bool = c.fauxMatch != tyNone
 
@@ -327,14 +326,14 @@ proc describeArgs*(c: PContext, n: PNode, startIdx = 1; prefer = preferName): st
       result.add ": "
       if arg.typ.isNil and arg.kind notin {nkStmtList, nkDo}:
         # XXX we really need to 'tryExpr' here!
-        arg = c.semOperand(c, n[i][1])
+        arg = semOperand(c, n[i][1])
         n[i].typ = arg.typ
         n[i][1] = arg
     else:
       if arg.typ.isNil and arg.kind notin {nkStmtList, nkDo, nkElse,
                                            nkOfBranch, nkElifBranch,
                                            nkExceptBranch}:
-        arg = c.semOperand(c, n[i])
+        arg = semOperand(c, n[i])
         n[i] = arg
     if arg.typ != nil and arg.typ.kind == tyError: return
     result.add argTypeToString(arg, prefer)
@@ -746,7 +745,7 @@ proc matchUserTypeClass*(m: var TCandidate; ff, a: PType): PType =
       if oldWriteHook != nil: oldWriteHook msg
       diagnostics.add msg
 
-  var checkedBody = c.semTryExpr(c, body.copyTree, flags)
+  var checkedBody = tryExpr(c, body.copyTree, flags)
 
   if collectDiagnostics:
     m.c.config.writelnHook = oldWriteHook
@@ -798,7 +797,7 @@ proc tryResolvingStaticExpr(c: var TCandidate, n: PNode,
   # This proc is used to evaluate such static expressions.
   let instantiated = replaceTypesInBody(c.c, c.bindings, n, nil,
                                         allowMetaTypes = allowUnresolved)
-  result = c.c.semExpr(c.c, instantiated)
+  result = semExpr(c.c, instantiated)
 
 proc inferStaticParam*(c: var TCandidate, lhs: PNode, rhs: BiggestInt): bool =
   # This is a simple integer arithimetic equation solver,
@@ -1880,6 +1879,10 @@ proc implicitConv(kind: TNodeKind, f: PType, arg: PNode, m: TCandidate,
   result.add c.graph.emptyNode
   result.add arg
 
+proc partialMatch*(c: PContext, n, nOrig: PNode, m: var TCandidate)
+proc argtypeMatches*(c: PContext, f, a: PType, fromHlo = false): bool
+import suggest
+
 proc userConvMatch(c: PContext, m: var TCandidate, f, a: PType,
                    arg: PNode): PNode =
   result = nil
@@ -1947,12 +1950,12 @@ proc localConvMatch(c: PContext, m: var TCandidate, f, a: PType,
   call.add(arg.copyTree)
   # XXX: This would be much nicer if we don't use `semTryExpr` and
   # instead we directly search for overloads with `resolveOverloads`:
-  result = c.semTryExpr(c, call, {efNoSem2Check})
+  result = tryExpr(c, call, {efNoSem2Check})
 
   if result != nil:
     if result.typ == nil: return nil
     # bug #13378, ensure we produce a real generic instantiation:
-    result = c.semExpr(c, call)
+    result = semExpr(c, call)
     # resulting type must be consistent with the other arguments:
     var r = typeRel(m, f[0], result.typ)
     if r < isGeneric: return nil
@@ -2005,7 +2008,7 @@ proc paramTypesMatchAux(m: var TCandidate, f, a: PType,
          tfGenericTypeParam notin a.flags:
         return newNodeIT(nkType, argOrig.info, makeTypeFromExpr(c, arg))
     else:
-      var evaluated = c.semTryConstExpr(c, arg)
+      var evaluated = tryConstExpr(c, arg)
       if evaluated != nil:
         # Don't build the type in-place because `evaluated` and `arg` may point
         # to the same object and we'd end up creating recursive types (#9255)
@@ -2056,11 +2059,11 @@ proc paramTypesMatchAux(m: var TCandidate, f, a: PType,
     lastBindingsLength = m.bindings.counter
     inc(bothMetaCounter)
     if arg.kind in {nkProcDef, nkFuncDef, nkIteratorDef} + nkLambdaKinds:
-      result = c.semInferredLambda(c, m.bindings, arg)
+      result = semInferredLambda(c, m.bindings, arg)
     elif arg.kind != nkSym:
       return nil
     else:
-      let inferred = c.semGenerateInstance(c, arg.sym, m.bindings, arg.info)
+      let inferred = generateInstance(c, arg.sym, m.bindings, arg.info)
       result = newSymNode(inferred, arg.info)
     inc(m.convMatches)
     arg = result
@@ -2089,11 +2092,11 @@ proc paramTypesMatchAux(m: var TCandidate, f, a: PType,
       result = implicitConv(nkHiddenStdConv, f, arg, m, c)
   of isInferred, isInferredConvertible:
     if arg.kind in {nkProcDef, nkFuncDef, nkIteratorDef} + nkLambdaKinds:
-      result = c.semInferredLambda(c, m.bindings, arg)
+      result = semInferredLambda(c, m.bindings, arg)
     elif arg.kind != nkSym:
       return nil
     else:
-      let inferred = c.semGenerateInstance(c, arg.sym, m.bindings, arg.info)
+      let inferred = generateInstance(c, arg.sym, m.bindings, arg.info)
       result = newSymNode(inferred, arg.info)
     if r == isInferredConvertible:
       inc(m.convMatches)
@@ -2135,7 +2138,7 @@ proc paramTypesMatchAux(m: var TCandidate, f, a: PType,
     elif a.kind == tyVoid and f.matchesVoidProc and argOrig.kind == nkStmtList:
       # lift do blocks without params to lambdas
       let p = c.graph
-      let lifted = c.semExpr(c, newProcNode(nkDo, argOrig.info, body = argOrig,
+      let lifted = semExpr(c, newProcNode(nkDo, argOrig.info, body = argOrig,
           params = nkFormalParams.newTree(p.emptyNode), name = p.emptyNode, pattern = p.emptyNode,
           genericParams = p.emptyNode, pragmas = p.emptyNode, exceptions = p.emptyNode), {})
       if f.kind == tyBuiltInTypeClass:
@@ -2259,7 +2262,7 @@ proc prepareOperand(c: PContext; formal: PType; a: PNode): PNode =
   elif a.typ.isNil:
     if formal.kind == tyIterable:
       let flags = {efDetermineType, efAllowStmt, efWantIterator, efWantIterable}
-      result = c.semOperand(c, a, flags)
+      result = semOperand(c, a, flags)
     else:
       # XXX This is unsound! 'formal' can differ from overloaded routine to
       # overloaded routine!
@@ -2268,14 +2271,14 @@ proc prepareOperand(c: PContext; formal: PType; a: PNode): PNode =
                   #else: {efDetermineType, efAllowStmt}
                   #elif formal.kind == tyTyped: {efDetermineType, efWantStmt}
                   #else: {efDetermineType}
-      result = c.semOperand(c, a, flags)
+      result = semOperand(c, a, flags)
   else:
     result = a
     considerGenSyms(c, result)
 
 proc prepareOperand(c: PContext; a: PNode): PNode =
   if a.typ.isNil:
-    result = c.semOperand(c, a, {efDetermineType})
+    result = semOperand(c, a, {efDetermineType})
   else:
     result = a
     considerGenSyms(c, result)
@@ -2602,11 +2605,9 @@ proc instTypeBoundOp*(c: PContext; dc: PSym; t: PType; info: TLineInfo;
   if typeRel(m, f, t) == isNone:
     localError(c.config, info, "cannot instantiate: '" & dc.name.s & "'")
   else:
-    result = c.semGenerateInstance(c, dc, m.bindings, info)
+    result = generateInstance(c, dc, m.bindings, info)
     if op == attachedDeepCopy:
       assert sfFromGeneric in result.flags
-
-include suggest
 
 when not declared(tests):
   template tests(s: untyped) = discard

@@ -10,12 +10,13 @@
 import
   ast, strutils, options, astalgo, trees, wordrecg,
   ropes, msgs, idents, renderer, semfold, procfind,
-  lookups, pragmas, semdata, sigmatch, intsets, linter,
+  lookups, pragmas, semdata, intsets, linter,
   lineinfos, strtabs, int128, modulegraphs
 
 import sem
-from semtypes import semIdentVis
+from semtypes import semIdentVis, semGenericParamList
 from semcall import getCallLineInfo
+import suggest
 
 discard """
   hygienic templates:
@@ -121,6 +122,25 @@ proc semMixinStmt*(c: PContext, n: PNode, toMixin: var IntSet): PNode =
   for i in 0..<n.len:
     toMixin.incl(considerQuotedIdent(c, n[i]).id)
     result.add symChoice(c, n[i], nil, scForceOpen)
+
+proc setGenericParamsMisc*(c: PContext; n: PNode) =
+  ## used by call defs (procs, templates, macros, ...) to analyse their generic
+  ## params, and store the originals in miscPos for better error reporting.
+  let orig = n[genericParamsPos]
+
+  doAssert orig.kind in {nkEmpty, nkGenericParams}
+
+  if n[genericParamsPos].kind == nkEmpty:
+    n[genericParamsPos] = newNodeI(nkGenericParams, n.info)
+  else:
+    # we keep the original params around for better error messages, see
+    # issue https://github.com/nim-lang/Nim/issues/1713
+    n[genericParamsPos] = semGenericParamList(c, orig)
+
+  if n[miscPos].kind == nkEmpty:
+    n[miscPos] = newTree(nkBracket, c.graph.emptyNode, orig)
+  else:
+    n[miscPos][1] = orig
 
 proc replaceIdentBySym(c: PContext; n: var PNode, s: PNode) =
   case n.kind

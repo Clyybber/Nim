@@ -10,18 +10,21 @@
 # this module does the semantic checking of type declarations
 
 import
-  ast, strutils, options, astalgo, trees,
-  wordrecg, ropes, msgs, idents, renderer, types, platform,
-  magicsys, nversion, nimsets, importer,
-  lookups, pragmas, semdata, semtypinst, sigmatch,
-  intsets, parampatterns, sempass2, linter, lineinfos, int128,
+  ast, strutils, options, astalgo, trees, wordrecg,
+  ropes, msgs, idents, renderer, types, platform,
+  magicsys, nversion, nimsets, importer, lookups,
+  pragmas, semdata, semtypinst, sigmatch, intsets,
+  parampatterns, sempass2, linter, lineinfos, int128,
   modulegraphs, enumtostr, concepts
 
-import seminst
-from semcall import semOverloadedCall
 import sem
-
+import seminst
 import math
+import suggest
+
+proc semIdentVis*(c: PContext, kind: TSymKind, n: PNode, allowed: TSymFlags): PSym
+proc semGenericParamList*(c: PContext, n: PNode, father: PType = nil): PNode
+from semgnrc import semConceptBody, semGenericStmt
 
 const
   errStringOrIdentNodeExpected* = "string or ident node expected"
@@ -50,6 +53,48 @@ const
   errIllegalRecursionInTypeX = "illegal recursion in type '$1'"
   errNoGenericParamsAllowedForX = "no generic parameters allowed for $1"
   errInOutFlagNotExtern = "the '$1' modifier can be used only with imported types"
+
+proc symFromType*(c: PContext; t: PType, info: TLineInfo): PSym =
+  if t.sym != nil: return t.sym
+  result = newSym(skType, getIdent(c.cache, "AnonType"), nextSymId c.idgen, t.owner, info)
+  result.flags.incl sfAnon
+  result.typ = t
+
+proc symNodeFromType*(c: PContext, t: PType, info: TLineInfo): PNode =
+  result = newSymNode(symFromType(c, t, info), info)
+  result.typ = makeTypeDesc(c, t)
+
+proc isUnresolvedSym(s: PSym): bool =
+  result = s.kind == skGenericParam
+  if not result and s.typ != nil:
+    result = tfInferrableStatic in s.typ.flags or
+        (s.kind == skParam and s.typ.isMetaType) or
+        (s.kind == skType and
+        s.typ.flags * {tfGenericTypeParam, tfImplicitTypeParam} != {})
+
+proc hasUnresolvedArgs*(c: PContext, n: PNode): bool =
+  # Checks whether an expression depends on generic parameters that
+  # don't have bound values yet. E.g. this could happen in situations
+  # such as:
+  #  type Slot[T] = array[T.size, byte]
+  #  proc foo[T](x: default(T))
+  #
+  # Both static parameter and type parameters can be unresolved.
+  case n.kind
+  of nkSym:
+    return isUnresolvedSym(n.sym)
+  of nkIdent, nkAccQuoted:
+    let ident = considerQuotedIdent(c, n)
+    var amb = false
+    let sym = searchInScopes(c, ident, amb)
+    if sym != nil:
+      return isUnresolvedSym(sym)
+    else:
+      return false
+  else:
+    for i in 0..<n.safeLen:
+      if hasUnresolvedArgs(c, n[i]): return true
+    return false
 
 proc semTypeNode*(c: PContext, n: PNode, prev: PType): PType
 
@@ -511,8 +556,6 @@ proc semIdentVis*(c: PContext, kind: TSymKind, n: PNode,
       illFormedAst(n, c.config)
   else:
     result = newSymG(kind, n, c)
-
-from semgnrc import semConceptBody, semGenericStmt
 
 proc semIdentWithPragma*(c: PContext, kind: TSymKind, n: PNode,
                         allowed: TSymFlags): PSym =
