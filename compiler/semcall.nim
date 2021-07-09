@@ -40,7 +40,7 @@ proc semResolvedCall*(c: PContext, x: TCandidate,
 proc canDeref*(n: PNode): bool {.inline.}
 proc tryDeref*(n: PNode): PNode
 proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
-                       filter: TSymKinds, flags: TExprFlags): PNode {.nosinks.}
+                       filter: TSymKinds, flags: TExprFlags): PNode
 proc explicitGenericInstantiation*(c: PContext, n: PNode, s: PSym): PNode
 proc searchForBorrowProc*(c: PContext, startScope: PScope, fn: PSym): PSym
 
@@ -616,7 +616,7 @@ proc tryDeref*(n: PNode): PNode =
   result.add n
 
 proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
-                       filter: TSymKinds, flags: TExprFlags): PNode {.nosinks.} =
+                       filter: TSymKinds, flags: TExprFlags): PNode =
   var errors: CandidateErrors = @[] # if efExplain in flags: @[] else: nil
   var r = resolveOverloads(c, n, nOrig, filter, flags, errors, efExplain in flags)
   if r.state == csMatch:
