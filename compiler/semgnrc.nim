@@ -23,7 +23,6 @@ import
 import sem
 import semtempl
 import suggest
-#import semutils
 
 proc getIdentNode(c: PContext; n: PNode): PNode =
   case n.kind

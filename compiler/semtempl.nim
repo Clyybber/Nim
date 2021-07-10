@@ -17,7 +17,7 @@ import sem
 from semtypes import semGenericParamList
 from semcall import getCallLineInfo
 import suggest
-#import semutils
+import semutils
 
 discard """
   hygienic templates:
@@ -35,9 +35,6 @@ discard """
   some form of preliminary symbol lookup in template definitions. Hygiene is
   a way to achieve lexical scoping at compile time.
 """
-
-const
-  errImplOfXNotAllowed* = "implementation of '$1' is not allowed"
 
 type
   TSymBinding = enum

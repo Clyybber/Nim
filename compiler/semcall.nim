@@ -14,40 +14,10 @@ import
   magicsys, lookups, semdata, semtypinst, sigmatch,
   lineinfos, strtabs, modulegraphs, astmsgs
 
-const
-  errTypeMismatch = "type mismatch: got <"
-  errButExpected = "but expected one of:"
-  errUndeclaredField* = "undeclared field: '$1'"
-  errUndeclaredRoutine = "attempting to call undeclared routine: '$1'"
-  errBadRoutine = "attempting to call routine: '$1'$2"
-  errAmbiguousCallXYZ* = "ambiguous call; both $1 and $2 match for: $3"
-
-proc renderNotLValue*(n: PNode): string
-proc notFoundError*(c: PContext, n: PNode, errors: CandidateErrors)
-proc bracketNotFoundError*(c: PContext; n: PNode)
-proc resolveOverloads*(c: PContext, n, orig: PNode,
-                      filter: TSymKinds, flags: TExprFlags,
-                      errors: var CandidateErrors,
-                      errorsEnabled: bool): TCandidate
-proc instGenericConvertersArg*(c: PContext, a: PNode, x: TCandidate)
-proc instGenericConvertersSons*(c: PContext, n: PNode, x: TCandidate)
-proc indexTypesMatch*(c: PContext, f, a: PType, arg: PNode): PNode
-proc inferWithMetatype*(c: PContext, formal: PType,
-                       arg: PNode, coerceDistincts = false): PNode
-proc getCallLineInfo*(n: PNode): TLineInfo
-proc semResolvedCall*(c: PContext, x: TCandidate,
-                     n: PNode, flags: TExprFlags): PNode
-proc canDeref*(n: PNode): bool {.inline.}
-proc tryDeref*(n: PNode): PNode
-proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
-                       filter: TSymKinds, flags: TExprFlags): PNode
-proc explicitGenericInstantiation*(c: PContext, n: PNode, s: PSym): PNode
-proc searchForBorrowProc*(c: PContext, startScope: PScope, fn: PSym): PSym
-
 import sem except generateInstance
 import seminst
 import suggest
-from semstmts import semProcAux
+import semutils
 
 from algorithm import sort
 

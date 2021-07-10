@@ -3,6 +3,15 @@ import
   semdata, modulegraphs, lineinfos, magicsys, typeallowed
 
 const
+  errImplOfXNotAllowed* = "implementation of '$1' is not allowed"
+
+  errTypeMismatch* = "type mismatch: got <"
+  errButExpected* = "but expected one of:"
+  errUndeclaredField* = "undeclared field: '$1'"
+  errUndeclaredRoutine* = "attempting to call undeclared routine: '$1'"
+  errBadRoutine* = "attempting to call routine: '$1'$2"
+  errAmbiguousCallXYZ* = "ambiguous call; both $1 and $2 match for: $3"
+
   errMissingGenericParamsForTemplate* = "'$1' has unspecified generic parameters"
   errFloatToString* = "cannot convert '$1' to '$2'"
   errConstExprExpected* = "constant expression expected"

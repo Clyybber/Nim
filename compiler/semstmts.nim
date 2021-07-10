@@ -15,49 +15,83 @@ import
   magicsys, modulepaths, procfind, lookups, pragmas, semdata,
   semtypinst, sigmatch, intsets, vm, cgmeth, sempass2, linter,
   lowerings, lineinfos, strtabs, int128,
-  typeallowed, modulegraphs
-
-proc semDiscard*(c: PContext, n: PNode): PNode
-proc semBreakOrContinue*(c: PContext, n: PNode): PNode
-proc semAsm*(c: PContext, n: PNode): PNode
-proc semWhile*(c: PContext, n: PNode; flags: TExprFlags): PNode
-proc semProc*(c: PContext, n: PNode): PNode
-proc semIf*(c: PContext, n: PNode; flags: TExprFlags): PNode
-proc semTry*(c: PContext, n: PNode; flags: TExprFlags): PNode
-proc semUsing*(c: PContext; n: PNode): PNode
-proc semVarOrLet*(c: PContext, n: PNode, symkind: TSymKind): PNode
-proc semConst*(c: PContext, n: PNode): PNode
-proc semFor*(c: PContext, n: PNode; flags: TExprFlags): PNode
-proc semCase*(c: PContext, n: PNode; flags: TExprFlags): PNode
-proc semRaise*(c: PContext, n: PNode): PNode
-proc semAllTypeSections*(c: PContext; n: PNode): PNode
-proc semTypeSection*(c: PContext, n: PNode): PNode
-proc semParamList*(c: PContext, n, genericParams: PNode, s: PSym)
-proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode
-proc semProcAux*(c: PContext, n: PNode, kind: TSymKind,
-                validPragmas: TSpecialWords, flags: TExprFlags = {}): PNode
-proc semIterator*(c: PContext, n: PNode): PNode
-proc semFunc*(c: PContext, n: PNode): PNode
-proc semMethod*(c: PContext, n: PNode): PNode
-proc semConverterDef*(c: PContext, n: PNode): PNode
-proc semMacroDef*(c: PContext, n: PNode): PNode
-proc semPragmaBlock*(c: PContext, n: PNode): PNode
-proc semStaticStmt*(c: PContext, n: PNode): PNode
-proc semStmtList*(c: PContext, n: PNode, flags: TExprFlags): PNode
-proc semStmt*(c: PContext, n: PNode; flags: TExprFlags): PNode
+  typeallowed, modulegraphs, evaltempl
 
 from semcall import
-  inferWithMetatype, errAmbiguousCallXYZ, resolveOverloads, semResolvedCall, searchForBorrowProc
+  inferWithMetatype, resolveOverloads, semResolvedCall, searchForBorrowProc
 import sem except semTypeNode
 import semtypes
 from seminst import pushProcCon, fixupInstantiatedSymbols
 import hlo
-from semtempl import semPattern, setGenericParamsMisc, errImplOfXNotAllowed
+from semtempl import semPattern, setGenericParamsMisc
 from semgnrc import semGenericStmt
 import suggest
 import semutils
 
 import semstuff
+
+proc resetSemFlag(n: PNode) =
+  excl n.flags, nfSem
+  for i in 0..<n.safeLen:
+    resetSemFlag(n[i])
+
+proc semAfterMacroCall*(c: PContext, call, macroResult: PNode,
+                       s: PSym, flags: TExprFlags): PNode =
+  ## Semantically check the output of a macro.
+  ## This involves processes such as re-checking the macro output for type
+  ## coherence, making sure that variables declared with 'let' aren't
+  ## reassigned, and binding the unbound identifiers that the macro output
+  ## contains.
+  inc(c.config.evalTemplateCounter)
+  if c.config.evalTemplateCounter > evalTemplateLimit:
+    globalError(c.config, s.info, "template instantiation too nested")
+  c.friendModules.add(s.owner.getModule)
+  result = macroResult
+  resetSemFlag result
+  if s.typ[0] == nil:
+    result = semStmt(c, result, flags)
+  else:
+    var retType = s.typ[0]
+    if retType.kind == tyTypeDesc and tfUnresolved in retType.flags and
+        retType.len == 1:
+      # bug #11941: template fails(T: type X, v: auto): T
+      # does not mean we expect a tyTypeDesc.
+      retType = retType[0]
+    case retType.kind
+    of tyUntyped:
+      # Not expecting a type here allows templates like in ``tmodulealias.in``.
+      result = semExpr(c, result, flags)
+    of tyTyped:
+      # More restrictive version.
+      result = semExprWithType(c, result, flags)
+    of tyTypeDesc:
+      if result.kind == nkStmtList: result.transitionSonsKind(nkStmtListType)
+      var typ = semTypeNode(c, result, nil)
+      if typ == nil:
+        localError(c.config, result.info, "expression has no type: " &
+                   renderTree(result, {renderNoComments}))
+        result = newSymNode(errorSym(c, result))
+      else:
+        result.typ = makeTypeDesc(c, typ)
+      #result = symNodeFromType(c, typ, n.info)
+    else:
+      if s.ast[genericParamsPos] != nil and retType.isMetaType:
+        # The return type may depend on the Macro arguments
+        # e.g. template foo(T: typedesc): seq[T]
+        # We will instantiate the return type here, because
+        # we now know the supplied arguments
+        var paramTypes = newIdTable()
+        for param, value in genericParamsInMacroCall(s, call):
+          idTablePut(paramTypes, param.typ, value.typ)
+
+        retType = generateTypeInstance(c, paramTypes,
+                                       macroResult.info, retType)
+
+      result = semExpr(c, result, flags)
+      result = fitNode(c, retType, result, result.info)
+      #globalError(s.info, errInvalidParamKindX, typeToString(s.typ[0]))
+  dec(c.config.evalTemplateCounter)
+  discard c.friendModules.pop()
 
 proc semDiscard*(c: PContext, n: PNode): PNode =
   result = n
@@ -1917,7 +1951,7 @@ proc semIterator*(c: PContext, n: PNode): PNode =
     result.typ = makeVarType(c, result.typ, tyOwned)
     result.typ.callConv = ccClosure
 
-proc semProc(c: PContext, n: PNode): PNode =
+proc semProc*(c: PContext, n: PNode): PNode =
   result = semProcAux(c, n, skProc, procPragmas)
 
 proc semFunc*(c: PContext, n: PNode): PNode =

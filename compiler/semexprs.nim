@@ -25,7 +25,7 @@ when defined(nimfix):
 when not defined(leanCompiler):
   import spawn
 
-import sem except semStmt, semOverloadedCall, semTypeNode, generateInstance
+import sem except semStmt, semOverloadedCall, semTypeNode, generateInstance, semProcAux
 import semtempl
 import semtypes
 import semcall
@@ -36,11 +36,12 @@ import semutils
 import semstuff
 import semstmts
 
-proc semTypeOf(c: PContext; n: PNode): PNode
-proc semStaticExpr(c: PContext, n: PNode): PNode
-
 when defined(nimCompilerStacktraceHints):
   import std/stackframes
+
+proc semTypeOf(c: PContext; n: PNode): PNode
+proc semStaticExpr(c: PContext, n: PNode): PNode
+proc semFieldAccess(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
 
 proc semTemplateExpr*(c: PContext, n: PNode, s: PSym,
                      flags: TExprFlags = {}): PNode =
@@ -58,8 +59,6 @@ proc semTemplateExpr*(c: PContext, n: PNode, s: PSym,
 
   # XXX: A more elaborate line info rewrite might be needed
   result.info = info
-
-proc semFieldAccess(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
 
 template rejectEmptyNode(n: PNode) =
   # No matter what a nkEmpty node is not what we want here

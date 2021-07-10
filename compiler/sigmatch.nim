@@ -16,7 +16,7 @@ import
   lineinfos, lowerings, modulegraphs, concepts
 
 import sem
-import semutils
+from semutils import makeTypeDesc
 
 type
   MismatchKind* = enum
