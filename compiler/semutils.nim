@@ -1,8 +1,11 @@
 import
   ast, astalgo, strutils, msgs, idents, renderer, types,
-  semdata, modulegraphs, lineinfos, magicsys, typeallowed
+  semdata, modulegraphs, lineinfos, magicsys, typeallowed,
+  lookups
 
 const
+  errCannotInstantiateX* = "cannot instantiate: '$1'"
+
   errImplOfXNotAllowed* = "implementation of '$1' is not allowed"
 
   errTypeMismatch* = "type mismatch: got <"
@@ -79,6 +82,38 @@ const
   errIllegalRecursionInTypeX* = "illegal recursion in type '$1'"
   errNoGenericParamsAllowedForX* = "no generic parameters allowed for $1"
   errInOutFlagNotExtern* = "the '$1' modifier can be used only with imported types"
+
+proc isUnresolvedSym(s: PSym): bool =
+  result = s.kind == skGenericParam
+  if not result and s.typ != nil:
+    result = tfInferrableStatic in s.typ.flags or
+        (s.kind == skParam and s.typ.isMetaType) or
+        (s.kind == skType and
+        s.typ.flags * {tfGenericTypeParam, tfImplicitTypeParam} != {})
+
+proc hasUnresolvedArgs*(c: PContext, n: PNode): bool =
+  # Checks whether an expression depends on generic parameters that
+  # don't have bound values yet. E.g. this could happen in situations
+  # such as:
+  #  type Slot[T] = array[T.size, byte]
+  #  proc foo[T](x: default(T))
+  #
+  # Both static parameter and type parameters can be unresolved.
+  case n.kind
+  of nkSym:
+    return isUnresolvedSym(n.sym)
+  of nkIdent, nkAccQuoted:
+    let ident = considerQuotedIdent(c, n)
+    var amb = false
+    let sym = searchInScopes(c, ident, amb)
+    if sym != nil:
+      return isUnresolvedSym(sym)
+    else:
+      return false
+  else:
+    for i in 0..<n.safeLen:
+      if hasUnresolvedArgs(c, n[i]): return true
+    return false
 
 proc endsInNoReturn*(n: PNode): bool =
   # check if expr ends in raise exception or call of noreturn proc

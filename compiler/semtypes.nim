@@ -26,38 +26,6 @@ import semutils
 proc semGenericParamList*(c: PContext, n: PNode, father: PType = nil): PNode
 from semgnrc import semConceptBody, semGenericStmt
 
-proc isUnresolvedSym(s: PSym): bool =
-  result = s.kind == skGenericParam
-  if not result and s.typ != nil:
-    result = tfInferrableStatic in s.typ.flags or
-        (s.kind == skParam and s.typ.isMetaType) or
-        (s.kind == skType and
-        s.typ.flags * {tfGenericTypeParam, tfImplicitTypeParam} != {})
-
-proc hasUnresolvedArgs*(c: PContext, n: PNode): bool =
-  # Checks whether an expression depends on generic parameters that
-  # don't have bound values yet. E.g. this could happen in situations
-  # such as:
-  #  type Slot[T] = array[T.size, byte]
-  #  proc foo[T](x: default(T))
-  #
-  # Both static parameter and type parameters can be unresolved.
-  case n.kind
-  of nkSym:
-    return isUnresolvedSym(n.sym)
-  of nkIdent, nkAccQuoted:
-    let ident = considerQuotedIdent(c, n)
-    var amb = false
-    let sym = searchInScopes(c, ident, amb)
-    if sym != nil:
-      return isUnresolvedSym(sym)
-    else:
-      return false
-  else:
-    for i in 0..<n.safeLen:
-      if hasUnresolvedArgs(c, n[i]): return true
-    return false
-
 proc semTypeNode*(c: PContext, n: PNode, prev: PType): PType
 
 proc newOrPrevType(kind: TTypeKind, prev: PType, c: PContext): PType =

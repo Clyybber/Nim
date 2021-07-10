@@ -15,6 +15,7 @@ import
   types, lookups, lineinfos, pathutils, linter
 
 import sem
+import semutils
 from ic / ic import addCompilerProc
 
 const

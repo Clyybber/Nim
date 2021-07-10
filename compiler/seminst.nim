@@ -14,15 +14,6 @@ import
   lookups, pragmas, semdata, semtypinst, sempass2,
   lineinfos, modulegraphs
 
-const
-  errCannotInstantiateX* = "cannot instantiate: '$1'"
-
-proc pushProcCon*(c: PContext; owner: PSym)
-proc fixupInstantiatedSymbols*(c: PContext, s: PSym)
-proc instGenericContainer*(c: PContext, info: TLineInfo, header: PType,
-                          allowMetaTypes = false): PType
-proc referencesAnotherParam*(n: PNode, p: PSym): bool
-
 import hlo, sem
 import semutils
 
@@ -101,8 +92,10 @@ iterator instantiateGenericParamList*(c: PContext, n: PNode, pt: TIdTable): PSym
       if t.kind == tyStatic: s.ast = t.n
       yield s
 
-# For semcall:
 proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable, info: TLineInfo): PSym
+proc instGenericContainer*(c: PContext, info: TLineInfo, header: PType,
+                          allowMetaTypes = false): PType
+proc referencesAnotherParam*(n: PNode, p: PSym): bool
 
 from semcall import indexTypesMatch
 from semstuff import maybeAddResult, finishMethod

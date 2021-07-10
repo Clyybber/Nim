@@ -44,7 +44,6 @@ proc defaultConstructionError*(c: PContext, t: PType, info: TLineInfo)
 proc computeRequiresInit*(c: PContext, t: PType): bool
 proc tryExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
 proc tryConstExpr*(c: PContext, n: PNode): PNode
-proc hasUnresolvedArgs*(c: PContext, n: PNode): bool
 proc semOperand*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode
 proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
                        filter: TSymKinds, flags: TExprFlags): PNode
@@ -124,7 +123,6 @@ proc defaultConstructionError(c: PContext, t: PType, info: TLineInfo) = semexprs
 proc computeRequiresInit(c: PContext, t: PType): bool = semexprs.computeRequiresInit(c, t)
 proc tryExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode = semexprs.tryExpr(c, n, flags)
 proc tryConstExpr*(c: PContext, n: PNode): PNode = semexprs.tryConstExpr(c, n)
-proc hasUnresolvedArgs*(c: PContext, n: PNode): bool = semtypes.hasUnresolvedArgs(c, n)
 proc semOperand*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode = semexprs.semOperand(c, n, flags)
 proc semOverloadedCall*(c: PContext, n, nOrig: PNode,
                        filter: TSymKinds, flags: TExprFlags): PNode = semcall.semOverloadedCall(c, n, nOrig, filter, flags)
