@@ -12,7 +12,7 @@
 import
   ast, strutils, astalgo, msgs, idents, renderer, types,
   lookups, pragmas, semdata, semtypinst, sempass2,
-  lineinfos, modulegraphs, concepts
+  lineinfos, modulegraphs
 
 const
   errCannotInstantiateX* = "cannot instantiate: '$1'"
@@ -24,6 +24,7 @@ proc instGenericContainer*(c: PContext, info: TLineInfo, header: PType,
 proc referencesAnotherParam*(n: PNode, p: PSym): bool
 
 import hlo, sem
+import semutils
 
 import suggest
 
@@ -104,7 +105,7 @@ iterator instantiateGenericParamList*(c: PContext, n: PNode, pt: TIdTable): PSym
 proc generateInstance*(c: PContext, fn: PSym, pt: TIdTable, info: TLineInfo): PSym
 
 from semcall import indexTypesMatch
-from semstmts import finishMethod, maybeAddResult
+from semstuff import maybeAddResult, finishMethod
 
 proc sameInstantiation(a, b: TInstantiation): bool =
   if a.concreteTypes.len == b.concreteTypes.len:

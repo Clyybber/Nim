@@ -17,46 +17,14 @@ import
   lowerings, lineinfos, strtabs, int128,
   typeallowed, modulegraphs
 
-const
-  errNoSymbolToBorrowFromFound = "no symbol to borrow from found"
-  errDiscardValueX = "value of type '$1' has to be used (or discarded)"
-  errInvalidDiscard = "statement returns no value that can be discarded"
-  errInvalidControlFlowX = "invalid control flow: $1"
-  errSelectorMustBeOfCertainTypes = "selector must be of an ordinal type, float or string"
-  errExprCannotBeRaised = "only a 'ref object' can be raised"
-  errBreakOnlyInLoop = "'break' only allowed in loop construct"
-  errExceptionAlreadyHandled = "exception already handled"
-  errYieldNotAllowedHere* = "'yield' only allowed in an iterator"
-  errYieldNotAllowedInTryStmt = "'yield' cannot be used within 'try' in a non-inlined iterator"
-  errInvalidNumberOfYieldExpr = "invalid number of 'yield' expressions"
-  errCannotReturnExpr* = "current routine cannot return an expression"
-  errGenericLambdaNotAllowed = "A nested proc can have generic parameters only when " &
-    "it is used as an operand to another routine and the types " &
-    "of the generic paramers can be inferred from the expected signature."
-  errCannotInferTypeOfTheLiteral = "cannot infer the type of the $1"
-  errCannotInferReturnType* = "cannot infer the return type of '$1'"
-  errCannotInferStaticParam = "cannot infer the value of the static param '$1'"
-  errProcHasNoConcreteType* = "'$1' doesn't have a concrete type, due to unspecified generic parameters."
-  errLetNeedsInit = "'let' symbol requires an initialization"
-  errThreadvarCannotInit = "a thread var cannot be initialized explicitly; this would only run for the main thread"
-  errImplOfXexpected = "implementation of '$1' expected"
-  errRecursiveDependencyX = "recursive dependency: '$1'"
-  errRecursiveDependencyIteratorX* = "recursion is not supported in iterators: '$1'"
-  errPragmaOnlyInHeaderOfProcX = "pragmas are only allowed in the header of a proc; redefinition of $1"
-
 proc semDiscard*(c: PContext, n: PNode): PNode
 proc semBreakOrContinue*(c: PContext, n: PNode): PNode
 proc semAsm*(c: PContext, n: PNode): PNode
 proc semWhile*(c: PContext, n: PNode; flags: TExprFlags): PNode
 proc semProc*(c: PContext, n: PNode): PNode
-proc implicitlyDiscardable*(n: PNode): bool
-proc fixNilType*(c: PContext; n: PNode)
-proc discardCheck*(c: PContext, result: PNode, flags: TExprFlags)
 proc semIf*(c: PContext, n: PNode; flags: TExprFlags): PNode
 proc semTry*(c: PContext, n: PNode; flags: TExprFlags): PNode
 proc semUsing*(c: PContext; n: PNode): PNode
-proc hasUnresolvedParams*(n: PNode; flags: TExprFlags): bool
-proc makeDeref*(n: PNode): PNode
 proc semVarOrLet*(c: PContext, n: PNode, symkind: TSymKind): PNode
 proc semConst*(c: PContext, n: PNode): PNode
 proc semFor*(c: PContext, n: PNode; flags: TExprFlags): PNode
@@ -66,11 +34,6 @@ proc semAllTypeSections*(c: PContext; n: PNode): PNode
 proc semTypeSection*(c: PContext, n: PNode): PNode
 proc semParamList*(c: PContext, n, genericParams: PNode, s: PSym)
 proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode
-proc activate*(c: PContext, n: PNode)
-proc maybeAddResult*(c: PContext, s: PSym, n: PNode)
-proc whereToBindTypeHook*(c: PContext; t: PType): PType
-proc bindTypeHook*(c: PContext; s: PSym; n: PNode; op: TTypeAttachedOp)
-proc finishMethod*(c: PContext, s: PSym)
 proc semProcAux*(c: PContext, n: PNode, kind: TSymKind,
                 validPragmas: TSpecialWords, flags: TExprFlags = {}): PNode
 proc semIterator*(c: PContext, n: PNode): PNode
@@ -78,7 +41,6 @@ proc semFunc*(c: PContext, n: PNode): PNode
 proc semMethod*(c: PContext, n: PNode): PNode
 proc semConverterDef*(c: PContext, n: PNode): PNode
 proc semMacroDef*(c: PContext, n: PNode): PNode
-proc evalInclude*(c: PContext, n: PNode): PNode
 proc semPragmaBlock*(c: PContext, n: PNode): PNode
 proc semStaticStmt*(c: PContext, n: PNode): PNode
 proc semStmtList*(c: PContext, n: PNode, flags: TExprFlags): PNode
@@ -92,8 +54,10 @@ from seminst import pushProcCon, fixupInstantiatedSymbols
 import hlo
 from semtempl import semPattern, setGenericParamsMisc, errImplOfXNotAllowed
 from semgnrc import semGenericStmt
-from semexprs import changeType
 import suggest
+import semutils
+
+import semstuff
 
 proc semDiscard*(c: PContext, n: PNode): PNode =
   result = n
@@ -164,47 +128,6 @@ proc semExprBranchScope(c: PContext, n: PNode): PNode =
   openScope(c)
   result = semExprBranch(c, n)
   closeScope(c)
-
-const
-  skipForDiscardable = {nkIfStmt, nkIfExpr, nkCaseStmt, nkOfBranch,
-    nkElse, nkStmtListExpr, nkTryStmt, nkFinally, nkExceptBranch,
-    nkElifBranch, nkElifExpr, nkElseExpr, nkBlockStmt, nkBlockExpr,
-    nkHiddenStdConv, nkHiddenDeref}
-
-proc implicitlyDiscardable*(n: PNode): bool =
-  var n = n
-  while n.kind in skipForDiscardable: n = n.lastSon
-  result = n.kind in nkLastBlockStmts or
-           (isCallExpr(n) and n[0].kind == nkSym and
-           sfDiscardable in n[0].sym.flags)
-
-proc fixNilType*(c: PContext; n: PNode) =
-  if isAtom(n):
-    if n.kind != nkNilLit and n.typ != nil:
-      localError(c.config, n.info, errDiscardValueX % n.typ.typeToString)
-  elif n.kind in {nkStmtList, nkStmtListExpr}:
-    n.transitionSonsKind(nkStmtList)
-    for it in n: fixNilType(c, it)
-  n.typ = nil
-
-proc discardCheck*(c: PContext, result: PNode, flags: TExprFlags) =
-  if c.matchedConcept != nil or efInTypeof in flags: return
-
-  if result.typ != nil and result.typ.kind notin {tyTyped, tyVoid}:
-    if implicitlyDiscardable(result):
-      var n = newNodeI(nkDiscardStmt, result.info, 1)
-      n[0] = result
-    elif result.typ.kind != tyError and c.config.cmd != cmdInteractive:
-      var n = result
-      while n.kind in skipForDiscardable: n = n.lastSon
-      var s = "expression '" & $n & "' is of type '" &
-          result.typ.typeToString & "' and has to be used (or discarded)"
-      if result.info.line != n.info.line or
-          result.info.fileIndex != n.info.fileIndex:
-        s.add "; start of expression here: " & c.config$result.info
-      if result.typ.kind == tyProc:
-        s.add "; for a function call use ()"
-      localError(c.config, n.info, s)
 
 proc semIf*(c: PContext, n: PNode; flags: TExprFlags): PNode =
   result = n
@@ -440,40 +363,6 @@ proc hasEmpty(typ: PType): bool =
   elif typ.kind == tyTuple:
     for s in typ.sons:
       result = result or hasEmpty(s)
-
-proc hasUnresolvedParams*(n: PNode; flags: TExprFlags): bool =
-  result = tfUnresolved in n.typ.flags
-  when false:
-    case n.kind
-    of nkSym:
-      result = isGenericRoutineStrict(n.sym)
-    of nkSymChoices:
-      for ch in n:
-        if hasUnresolvedParams(ch, flags):
-          return true
-      result = false
-    else:
-      result = false
-    if efOperand in flags:
-      if tfUnresolved notin n.typ.flags:
-        result = false
-
-proc makeDeref*(n: PNode): PNode =
-  var t = n.typ
-  if t.kind in tyUserTypeClasses and t.isResolvedUserTypeClass:
-    t = t.lastSon
-  t = skipTypes(t, {tyGenericInst, tyAlias, tySink, tyOwned})
-  result = n
-  if t.kind in {tyVar, tyLent}:
-    result = newNodeIT(nkHiddenDeref, n.info, t[0])
-    result.add n
-    t = skipTypes(t[0], {tyGenericInst, tyAlias, tySink, tyOwned})
-  while t.kind in {tyPtr, tyRef}:
-    var a = result
-    let baseTyp = t.lastSon
-    result = newNodeIT(nkHiddenDeref, n.info, baseTyp)
-    result.add a
-    t = skipTypes(baseTyp, {tyGenericInst, tyAlias, tySink, tyOwned})
 
 proc fillPartialObject(c: PContext; n: PNode; typ: PType) =
   if n.len == 2:
@@ -1522,37 +1411,6 @@ proc semBorrow(c: PContext, n: PNode, s: PSym) =
   else:
     localError(c.config, n.info, errNoSymbolToBorrowFromFound)
 
-proc swapResult(n: PNode, sRes: PSym, dNode: PNode) =
-  ## Swap nodes that are (skResult) symbols to d(estination)Node.
-  for i in 0..<n.safeLen:
-    if n[i].kind == nkSym and n[i].sym == sRes:
-        n[i] = dNode
-    swapResult(n[i], sRes, dNode)
-
-proc addResult(c: PContext, n: PNode, t: PType, owner: TSymKind) =
-  template genResSym(s) =
-    var s = newSym(skResult, getIdent(c.cache, "result"), nextSymId c.idgen,
-                   getCurrOwner(c), n.info)
-    s.typ = t
-    incl(s.flags, sfUsed)
-
-  if owner == skMacro or t != nil:
-    if n.len > resultPos and n[resultPos] != nil:
-      if n[resultPos].sym.kind != skResult:
-        localError(c.config, n.info, "incorrect result proc symbol")
-      if n[resultPos].sym.owner != getCurrOwner(c):
-        # re-write result with new ownership, and re-write the proc accordingly
-        let sResSym = n[resultPos].sym
-        genResSym(s)
-        n[resultPos] = newSymNode(s)
-        swapResult(n, sResSym, n[resultPos])
-      c.p.resultSym = n[resultPos].sym
-    else:
-      genResSym(s)
-      c.p.resultSym = s
-      n.add newSymNode(c.p.resultSym)
-    addParamOrResult(c, c.p.resultSym, owner)
-
 proc copyExcept(n: PNode, i: int): PNode =
   result = copyNode(n)
   for j in 0..<n.len:
@@ -1666,83 +1524,6 @@ proc semInferredLambda*(c: PContext, pt: TIdTable, n: PNode): PNode =
   # result = inferred.ast
   # result.kind = arg.kind
 
-proc activate*(c: PContext, n: PNode) =
-  # XXX: This proc is part of my plan for getting rid of
-  # forward declarations. stay tuned.
-  when false:
-    # well for now it breaks code ...
-    case n.kind
-    of nkLambdaKinds:
-      discard semLambda(c, n, {})
-    of nkCallKinds:
-      for i in 1..<n.len: activate(c, n[i])
-    else:
-      discard
-
-proc maybeAddResult*(c: PContext, s: PSym, n: PNode) =
-  if s.kind == skMacro:
-    let resultType = sysTypeFromName(c.graph, n.info, "NimNode")
-    addResult(c, n, resultType, s.kind)
-  elif s.typ[0] != nil and not isInlineIterator(s.typ):
-    addResult(c, n, s.typ[0], s.kind)
-
-proc canonType(c: PContext, t: PType): PType =
-  if t.kind == tySequence:
-    result = c.graph.sysTypes[tySequence]
-  else:
-    result = t
-
-proc prevDestructor(c: PContext; prevOp: PSym; obj: PType; info: TLineInfo) =
-  var msg = "cannot bind another '" & prevOp.name.s & "' to: " & typeToString(obj)
-  if sfOverriden notin prevOp.flags:
-    msg.add "; previous declaration was constructed here implicitly: " & (c.config $ prevOp.info)
-  else:
-    msg.add "; previous declaration was here: " & (c.config $ prevOp.info)
-  localError(c.config, info, errGenerated, msg)
-
-proc whereToBindTypeHook*(c: PContext; t: PType): PType =
-  result = t
-  while true:
-    if result.kind in {tyGenericBody, tyGenericInst}: result = result.lastSon
-    elif result.kind == tyGenericInvocation: result = result[0]
-    else: break
-  if result.kind in {tyObject, tyDistinct, tySequence, tyString}:
-    result = canonType(c, result)
-
-proc bindTypeHook*(c: PContext; s: PSym; n: PNode; op: TTypeAttachedOp) =
-  let t = s.typ
-  var noError = false
-  let cond = if op == attachedDestructor:
-               t.len == 2 and t[0] == nil and t[1].kind == tyVar
-             else:
-               t.len >= 2 and t[0] == nil
-
-  if cond:
-    var obj = t[1].skipTypes({tyVar})
-    while true:
-      incl(obj.flags, tfHasAsgn)
-      if obj.kind in {tyGenericBody, tyGenericInst}: obj = obj.lastSon
-      elif obj.kind == tyGenericInvocation: obj = obj[0]
-      else: break
-    if obj.kind in {tyObject, tyDistinct, tySequence, tyString}:
-      obj = canonType(c, obj)
-      let ao = getAttachedOp(c.graph, obj, op)
-      if ao == s:
-        discard "forward declared destructor"
-      elif ao.isNil and tfCheckedForDestructor notin obj.flags:
-        setAttachedOp(c.graph, c.module.position, obj, op, s)
-      else:
-        prevDestructor(c, ao, obj, n.info)
-      noError = true
-      if obj.owner.getModule != s.getModule:
-        localError(c.config, n.info, errGenerated,
-          "type bound operation `" & s.name.s & "` can be defined only in the same module with its type (" & obj.typeToString() & ")")
-  if not noError and sfSystemModule notin s.owner.flags:
-    localError(c.config, n.info, errGenerated,
-      "signature for '" & s.name.s & "' must be proc[T: object](x: var T)")
-  incl(s.flags, sfUsed)
-  incl(s.flags, sfOverriden)
-
 proc semOverride(c: PContext, s: PSym, n: PNode) =
   let name = s.name.s.normalize
   case name
@@ -1831,16 +1612,6 @@ proc cursorInProcAux(conf: ConfigRef; n: PNode): bool =
 proc cursorInProc(conf: ConfigRef; n: PNode): bool =
   if n.info.fileIndex == conf.m.trackPos.fileIndex:
     result = cursorInProcAux(conf, n)
-
-proc hasObjParam(s: PSym): bool =
-  var t = s.typ
-  for col in 1..<t.len:
-    if skipTypes(t[col], skipPtrs).kind == tyObject:
-      return true
-
-proc finishMethod*(c: PContext, s: PSym) =
-  if hasObjParam(s):
-    methodDef(c.graph, c.idgen, s)
 
 proc semMethodPrototype(c: PContext; s: PSym; n: PNode) =
   if s.isGenericRoutine:
@@ -2209,38 +1980,6 @@ proc semMacroDef*(c: PContext, n: PNode): PNode =
   if allUntyped: incl(s.flags, sfAllUntyped)
   if n[bodyPos].kind == nkEmpty:
     localError(c.config, n.info, errImplOfXexpected % s.name.s)
-
-proc incMod(c: PContext, n: PNode, it: PNode, includeStmtResult: PNode) =
-  var f = checkModuleName(c.config, it)
-  if f != InvalidFileIdx:
-    addIncludeFileDep(c, f)
-    onProcessing(c.graph, f, "include", c.module)
-    if containsOrIncl(c.includedFiles, f.int):
-      localError(c.config, n.info, errRecursiveDependencyX % toMsgFilename(c.config, f))
-    else:
-      includeStmtResult.add semStmt(c, c.graph.includeFileCallback(c.graph, c.module, f), {})
-      excl(c.includedFiles, f.int)
-
-proc evalInclude*(c: PContext, n: PNode): PNode =
-  result = newNodeI(nkStmtList, n.info)
-  result.add n
-  for i in 0..<n.len:
-    var imp: PNode
-    let it = n[i]
-    if it.kind == nkInfix and it.len == 3 and it[0].ident.s != "/":
-      localError(c.config, it.info, "Cannot use '" & it[0].ident.s & "' in 'include'.")
-    if it.kind == nkInfix and it.len == 3 and it[2].kind == nkBracket:
-      let sep = it[0]
-      let dir = it[1]
-      imp = newNodeI(nkInfix, it.info)
-      imp.add sep
-      imp.add dir
-      imp.add sep # dummy entry, replaced in the loop
-      for x in it[2]:
-        imp[2] = x
-        incMod(c, n, imp, result)
-    else:
-      incMod(c, n, it, result)
 
 proc setLine(n: PNode, info: TLineInfo) =
   for i in 0..<n.safeLen: setLine(n[i], info)

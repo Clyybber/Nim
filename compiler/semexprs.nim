@@ -17,7 +17,7 @@ import
   vm, aliases, lambdalifting, evaltempl, parampatterns,
   sempass2, linter, lowerings, plugins/active, lineinfos,
   strtabs, int128, isolation_check, typeallowed,
-  modulegraphs, concepts, astmsgs
+  modulegraphs, astmsgs, modulepaths
 
 when defined(nimfix):
   import nimfix/prettybase
@@ -29,27 +29,18 @@ import sem except semStmt, semOverloadedCall, semTypeNode, generateInstance
 import semtempl
 import semtypes
 import semcall
-import semstmts
 import seminst
 import suggest
+import semutils
+
+import semstuff
+import semstmts
 
 proc semTypeOf(c: PContext; n: PNode): PNode
 proc semStaticExpr(c: PContext, n: PNode): PNode
 
 when defined(nimCompilerStacktraceHints):
   import std/stackframes
-
-const
-  errExprXHasNoType = "expression '$1' has no type (or is ambiguous)"
-  errXExpectsTypeOrValue = "'$1' expects a type or value"
-  errVarForOutParamNeededX = "for a 'var' type a variable needs to be passed; but '$1' is immutable"
-  errXStackEscape = "address of '$1' may not escape its stack frame"
-  errExprHasNoAddress = "expression has no address"
-  errCannotInterpretNodeX = "cannot evaluate '$1'"
-  errNamedExprExpected = "named expression expected"
-  errNamedExprNotAllowed = "named expression not allowed here"
-  errFieldInitTwice = "field initialized twice: '$1'"
-  errUndeclaredFieldX = "undeclared field: '$1'"
 
 proc semTemplateExpr*(c: PContext, n: PNode, s: PSym,
                      flags: TExprFlags = {}): PNode =
@@ -577,52 +568,6 @@ proc overloadedCallOpr(c: PContext, n: PNode): PNode =
     result.add newIdentNode(par, n.info)
     for i in 0..<n.len: result.add n[i]
     result = semExpr(c, result)
-
-proc changeType*(c: PContext; n: PNode, newType: PType, check: bool) =
-  case n.kind
-  of nkCurly, nkBracket:
-    for i in 0..<n.len:
-      changeType(c, n[i], elemType(newType), check)
-  of nkPar, nkTupleConstr:
-    let tup = newType.skipTypes({tyGenericInst, tyAlias, tySink, tyDistinct})
-    if tup.kind != tyTuple:
-      if tup.kind == tyObject: return
-      globalError(c.config, n.info, "no tuple type for constructor")
-    elif n.len > 0 and n[0].kind == nkExprColonExpr:
-      # named tuple?
-      for i in 0..<n.len:
-        var m = n[i][0]
-        if m.kind != nkSym:
-          globalError(c.config, m.info, "invalid tuple constructor")
-          return
-        if tup.n != nil:
-          var f = getSymFromList(tup.n, m.sym.name)
-          if f == nil:
-            globalError(c.config, m.info, "unknown identifier: " & m.sym.name.s)
-            return
-          changeType(c, n[i][1], f.typ, check)
-        else:
-          changeType(c, n[i][1], tup[i], check)
-    else:
-      for i in 0..<n.len:
-        changeType(c, n[i], tup[i], check)
-        when false:
-          var m = n[i]
-          var a = newNodeIT(nkExprColonExpr, m.info, newType[i])
-          a.add newSymNode(newType.n[i].sym)
-          a.add m
-          changeType(m, tup[i], check)
-  of nkCharLit..nkUInt64Lit:
-    if check and n.kind != nkUInt64Lit and not sameType(n.typ, newType):
-      let value = n.intVal
-      if value < firstOrd(c.config, newType) or value > lastOrd(c.config, newType):
-        localError(c.config, n.info, "cannot convert " & $value &
-                                         " to " & typeToString(newType))
-  of nkFloatLit..nkFloat64Lit:
-    if check and not floatRangeCheck(n.floatVal, newType):
-      localError(c.config, n.info, errFloatToString % [$n.floatVal, typeToString(newType)])
-  else: discard
-  n.typ = newType
 
 proc arrayConstrType(c: PContext, n: PNode): PType =
   var typ = newTypeS(tyArray, c)
@@ -1840,6 +1785,15 @@ proc semReturn(c: PContext, n: PNode): PNode =
   else:
     localError(c.config, n.info, "'return' not allowed here")
 
+proc fixNilType(c: PContext; n: PNode) =
+  if isAtom(n):
+    if n.kind != nkNilLit and n.typ != nil:
+      localError(c.config, n.info, errDiscardValueX % n.typ.typeToString)
+  elif n.kind in {nkStmtList, nkStmtListExpr}:
+    n.transitionSonsKind(nkStmtList)
+    for it in n: fixNilType(c, it)
+  n.typ = nil
+
 proc semProcBody*(c: PContext, n: PNode): PNode =
   openScope(c)
   result = semExpr(c, n)
@@ -2753,6 +2707,38 @@ proc getNilType(c: PContext): PType =
     result.size = c.config.target.ptrSize
     result.align = c.config.target.ptrSize.int16
     c.nilTypeCache = result
+
+proc incMod(c: PContext, n: PNode, it: PNode, includeStmtResult: PNode) =
+  var f = checkModuleName(c.config, it)
+  if f != InvalidFileIdx:
+    addIncludeFileDep(c, f)
+    onProcessing(c.graph, f, "include", c.module)
+    if containsOrIncl(c.includedFiles, f.int):
+      localError(c.config, n.info, errRecursiveDependencyX % toMsgFilename(c.config, f))
+    else:
+      includeStmtResult.add semStmt(c, c.graph.includeFileCallback(c.graph, c.module, f), {})
+      excl(c.includedFiles, f.int)
+
+proc evalInclude*(c: PContext, n: PNode): PNode =
+  result = newNodeI(nkStmtList, n.info)
+  result.add n
+  for i in 0..<n.len:
+    var imp: PNode
+    let it = n[i]
+    if it.kind == nkInfix and it.len == 3 and it[0].ident.s != "/":
+      localError(c.config, it.info, "Cannot use '" & it[0].ident.s & "' in 'include'.")
+    if it.kind == nkInfix and it.len == 3 and it[2].kind == nkBracket:
+      let sep = it[0]
+      let dir = it[1]
+      imp = newNodeI(nkInfix, it.info)
+      imp.add sep
+      imp.add dir
+      imp.add sep # dummy entry, replaced in the loop
+      for x in it[2]:
+        imp[2] = x
+        incMod(c, n, imp, result)
+    else:
+      incMod(c, n, it, result)
 
 proc semExpr*(c: PContext, n: PNode, flags: TExprFlags = {}): PNode =
   when defined(nimCompilerStacktraceHints):

@@ -21,48 +21,10 @@ import sem
 import seminst
 import math
 import suggest
+import semutils
 
-proc semIdentVis*(c: PContext, kind: TSymKind, n: PNode, allowed: TSymFlags): PSym
 proc semGenericParamList*(c: PContext, n: PNode, father: PType = nil): PNode
 from semgnrc import semConceptBody, semGenericStmt
-
-const
-  errStringOrIdentNodeExpected* = "string or ident node expected"
-  errStringLiteralExpected* = "string literal expected"
-  errIntLiteralExpected* = "integer literal expected"
-  errWrongNumberOfVariables* = "wrong number of variables"
-  errInvalidOrderInEnumX = "invalid order in enum '$1'"
-  errOrdinalTypeExpected* = "ordinal type expected"
-  errSetTooBig = "set is too large"
-  errBaseTypeMustBeOrdinal = "base type of a set must be an ordinal"
-  errInheritanceOnlyWithNonFinalObjects = "inheritance only works with non-final objects"
-  errXExpectsOneTypeParam = "'$1' expects one type parameter"
-  errArrayExpectsTwoTypeParams = "array expects two type parameters"
-  errInvalidVisibilityX = "invalid visibility: '$1'"
-  errInitHereNotAllowed = "initialization not allowed here"
-  errXCannotBeAssignedTo* = "'$1' cannot be assigned to"
-  errIteratorNotAllowed = "iterators can only be defined at the module's top level"
-  errXNeedsReturnType* = "$1 needs a return type"
-  errNoReturnTypeDeclared* = "no return type declared"
-  errTIsNotAConcreteType* = "'$1' is not a concrete type"
-  errTypeExpected = "type expected"
-  errXOnlyAtModuleScope* = "'$1' is only allowed at top level"
-  errDuplicateCaseLabel = "duplicate case label"
-  errMacroBodyDependsOnGenericTypes = "the macro body cannot be compiled, " &
-    "because the parameter '$1' has a generic type"
-  errIllegalRecursionInTypeX = "illegal recursion in type '$1'"
-  errNoGenericParamsAllowedForX = "no generic parameters allowed for $1"
-  errInOutFlagNotExtern = "the '$1' modifier can be used only with imported types"
-
-proc symFromType*(c: PContext; t: PType, info: TLineInfo): PSym =
-  if t.sym != nil: return t.sym
-  result = newSym(skType, getIdent(c.cache, "AnonType"), nextSymId c.idgen, t.owner, info)
-  result.flags.incl sfAnon
-  result.typ = t
-
-proc symNodeFromType*(c: PContext, t: PType, info: TLineInfo): PNode =
-  result = newSymNode(symFromType(c, t, info), info)
-  result.typ = makeTypeDesc(c, t)
 
 proc isUnresolvedSym(s: PSym): bool =
   result = s.kind == skGenericParam
@@ -535,27 +497,6 @@ proc semTuple(c: PContext, n: PNode, prev: PType): PType =
   if result.n.len == 0: result.n = nil
   if isTupleRecursive(result):
     localError(c.config, n.info, errIllegalRecursionInTypeX % typeToString(result))
-
-proc semIdentVis*(c: PContext, kind: TSymKind, n: PNode,
-                 allowed: TSymFlags): PSym =
-  # identifier with visibility
-  if n.kind == nkPostfix:
-    if n.len == 2:
-      # for gensym'ed identifiers the identifier may already have been
-      # transformed to a symbol and we need to use that here:
-      result = newSymG(kind, n[1], c)
-      var v = considerQuotedIdent(c, n[0])
-      if sfExported in allowed and v.id == ord(wStar):
-        incl(result.flags, sfExported)
-      else:
-        if not (sfExported in allowed):
-          localError(c.config, n[0].info, errXOnlyAtModuleScope % "export")
-        else:
-          localError(c.config, n[0].info, errInvalidVisibilityX % renderTree(n[0]))
-    else:
-      illFormedAst(n, c.config)
-  else:
-    result = newSymG(kind, n, c)
 
 proc semIdentWithPragma*(c: PContext, kind: TSymKind, n: PNode,
                         allowed: TSymFlags): PSym =

@@ -13,7 +13,7 @@ import ast, astalgo, msgs, types, magicsys, semdata, renderer, options,
   lineinfos, modulegraphs
 
 import sem
-from concepts import makeTypeDesc
+import semutils
 
 const tfInstClearedFlags = {tfHasMeta, tfUnresolved}
 

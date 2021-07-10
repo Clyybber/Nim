@@ -14,9 +14,10 @@ import
   lineinfos, strtabs, int128, modulegraphs
 
 import sem
-from semtypes import semIdentVis, semGenericParamList
+from semtypes import semGenericParamList
 from semcall import getCallLineInfo
 import suggest
+#import semutils
 
 discard """
   hygienic templates:

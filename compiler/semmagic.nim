@@ -10,6 +10,8 @@
 # This include file implements the semantic checking for magics.
 # included from sem.nim
 
+import semutils
+
 proc semAddrArg(c: PContext; n: PNode; isUnsafeAddr = false): PNode =
   let x = semExprWithType(c, n)
   if x.kind == nkSym:
@@ -461,6 +463,15 @@ proc semPrivateAccess(c: PContext, n: PNode): PNode =
   let t = n[1].typ[0].toObjectFromRefPtrGeneric
   c.currentScope.allowPrivateAccess.add t.sym
   result = newNodeIT(nkEmpty, n.info, getSysType(c.graph, n.info, tyVoid))
+
+proc whereToBindTypeHook*(c: PContext; t: PType): PType =
+  result = t
+  while true:
+    if result.kind in {tyGenericBody, tyGenericInst}: result = result.lastSon
+    elif result.kind == tyGenericInvocation: result = result[0]
+    else: break
+  if result.kind in {tyObject, tyDistinct, tySequence, tyString}:
+    result = canonType(c, result)
 
 proc magicsAfterOverloadResolution(c: PContext, n: PNode,
                                    flags: TExprFlags): PNode =
